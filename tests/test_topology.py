@@ -83,6 +83,13 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('controller=RemoteController', script)
         self.assertIn('net.addLink(s1, s2, bw=100, delay=\'2ms\')', script)
 
+    def test_notes_become_comments(self):
+        t = topo([H1, S1], [{'id': 'l', 'src': 'a', 'dst': 'c'}])
+        t['notes'] = [{'x': 0, 'y': 0, 'text': 'Office LAN\nfloor 2'}]
+        script = generate_script(t)
+        compile(script, 'topology.py', 'exec')
+        self.assertIn('# Note: Office LAN\n#       floor 2\n', script)
+
 
 if __name__ == '__main__':
     unittest.main()

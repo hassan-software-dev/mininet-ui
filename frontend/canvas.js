@@ -9,7 +9,9 @@ const layerLinks = document.getElementById('layer-links');
 const layerNodes = document.getElementById('layer-nodes');
 const rubberBand = document.getElementById('rubber-band');
 
-let drag = null;   // { id, dx, dy, moved } while moving a node
+const layerNotes = document.getElementById('layer-notes');
+
+let drag = null;   // { obj, dx, dy, moved } while moving a node or note
 
 // Create an SVG element with attributes and append it to parent.
 function el(tag, attrs, parent) {
@@ -81,6 +83,14 @@ function subtitle(node) {
   return (node.ip || '') + ':' + (node.port || '');
 }
 
+// Size of each device icon on the canvas; the artwork is the <symbol>
+// "dev-<type>" defined at the top of index.html.
+const ICON_SIZE = {
+  host: { w: 48, h: 44 },
+  switch: { w: 60, h: 43 },
+  controller: { w: 40, h: 48 },
+};
+
 function drawNode(node) {
   const cls = ['node', node.type];
   if (state.selected && state.selected.id === node.id) cls.push('selected');
@@ -88,25 +98,23 @@ function drawNode(node) {
   const g = el('g', { class: cls.join(' '), 'data-id': node.id,
                       transform: `translate(${node.x},${node.y})` }, layerNodes);
 
-  if (node.type === 'host') {
-    el('rect', { class: 'halo', x: -27, y: -23, width: 54, height: 46, rx: 8 }, g);
-    el('rect', { class: 'shape', x: -20, y: -16, width: 40, height: 26, rx: 4 }, g);
-    el('path', { class: 'glyph', d: 'M0 10 V16 M-9 16 H9' }, g);
-  } else if (node.type === 'switch') {
-    el('rect', { class: 'halo', x: -33, y: -21, width: 66, height: 42, rx: 9 }, g);
-    el('rect', { class: 'shape', x: -26, y: -14, width: 52, height: 28, rx: 6 }, g);
-    el('path', { class: 'glyph',
-                 d: 'M-14 -5 H14 M8 -10 L14 -5 L8 0 M14 5 H-14 M-8 0 L-14 5 L-8 10' }, g);
-  } else {
-    el('circle', { class: 'halo', r: 27 }, g);
-    el('circle', { class: 'shape', r: 20 }, g);
-    text(g, 0, 6, 'glyph', 'C');
-  }
-  text(g, 0, 36, 'name', node.name);
-  text(g, 0, 49, 'sub', subtitle(node));
+  const { w, h } = ICON_SIZE[node.type];
+  el('rect', { class: 'halo', x: -w / 2 - 6, y: -h / 2 - 5, width: w + 12,
+               height: h + 10, rx: 4 }, g);
+  el('use', { href: '#dev-' + node.type, x: -w / 2, y: -h / 2, width: w, height: h }, g);
+  text(g, 0, h / 2 + 14, 'name', node.name);
+  text(g, 0, h / 2 + 27, 'sub', subtitle(node));
 
   const status = nodeStatus(node);
-  if (status) el('circle', { class: 'dot ' + status, cx: 20, cy: -16, r: 5 }, g);
+  if (status) el('circle', { class: 'dot ' + status, cx: w / 2, cy: -h / 2, r: 5 }, g);
+}
+
+// Colour of the port lights at both ends of a link, as in Packet Tracer:
+// red = network stopped, green = up, amber = running but the controller
+// hasn't discovered the link yet (live view only).
+function linkLight(link) {
+  if (!state.running) return 'down';
+  return linkStatus(link) === 'down' ? 'pending' : 'up';
 }
 
 function linkLabel(link) {
@@ -122,12 +130,17 @@ function drawLink(link) {
   if (!a || !b) return;
   const cls = ['link'];
   if (state.selected && state.selected.id === link.id) cls.push('selected');
-  const status = linkStatus(link);
-  if (status) cls.push(status);
   const g = el('g', { class: cls.join(' '), 'data-id': link.id }, layerLinks);
   const pts = { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
   el('line', Object.assign({ class: 'wire' }, pts), g);
   el('line', Object.assign({ class: 'hit' }, pts), g);   // wide invisible click target
+
+  // Port lights just outside each device icon.
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const d = Math.min(36, len * 0.3), light = 'light ' + linkLight(link);
+  el('circle', { class: light, r: 4, cx: a.x + dx / len * d, cy: a.y + dy / len * d }, g);
+  el('circle', { class: light, r: 4, cx: b.x - dx / len * d, cy: b.y - dy / len * d }, g);
+
   const label = linkLabel(link);
   if (label) text(g, (a.x + b.x) / 2, (a.y + b.y) / 2 - 6, '', label);
 }
@@ -146,9 +159,28 @@ function render() {
   layerLinks.replaceChildren();
   layerNodes.replaceChildren();
   drawControlLines();
+  layerNotes.replaceChildren();
   state.topo.links.forEach(drawLink);
   state.topo.nodes.forEach(drawNode);
+  state.topo.notes.forEach(drawNote);
   svg.setAttribute('class', 'tool-' + state.tool);
+}
+
+// A note is multi-line text on a pale yellow box; (x, y) is its top-left.
+function drawNote(note) {
+  const cls = 'note' + (state.selected && state.selected.id === note.id ? ' selected' : '');
+  const g = el('g', { class: cls, 'data-id': note.id,
+                      transform: `translate(${note.x},${note.y})` }, layerNotes);
+  const box = el('rect', { class: 'note-box', rx: 2 }, g);
+  const t = el('text', { class: 'note-text' + (note.text ? '' : ' empty') }, g);
+  (note.text || '(empty note)').split('\n').forEach((line, i) => {
+    const span = el('tspan', { x: 8, dy: i === 0 ? '1.15em' : '1.3em' }, t);
+    span.textContent = line || ' ';
+  });
+  const size = t.getBBox();      // measure the text to size the box around it
+  box.setAttribute('width', Math.max(40, size.width + 16));
+  box.setAttribute('height', size.height + 10);
+  t.setAttribute('y', 3);
 }
 
 // ---- interaction ---------------------------------------------------------
@@ -194,18 +226,36 @@ function onNodeDown(evt, id, p) {
     // Any other tool: select, and start dragging (allowed while running,
     // since positions only matter for the drawing).
     select('node', id);
-    drag = { id, dx: p.x - node.x, dy: p.y - node.y, moved: false };
-    svg.setPointerCapture(evt.pointerId);
+    startDrag(evt, node, p);
+  }
+}
+
+function startDrag(evt, obj, p) {
+  drag = { obj, dx: p.x - obj.x, dy: p.y - obj.y, moved: false };
+  svg.setPointerCapture(evt.pointerId);
+}
+
+// Notes don't affect the network, so they can be edited while it runs.
+function onNoteDown(evt, id, p) {
+  if (state.tool === 'delete') {
+    deleteNote(id);
+    onTopologyChanged();
+  } else {
+    select('note', id);
+    startDrag(evt, findNote(id), p);
   }
 }
 
 svg.addEventListener('pointerdown', evt => {
   if (evt.button !== 0) return;
   const p = svgPoint(evt);
+  const noteEl = evt.target.closest('.note');
   const nodeEl = evt.target.closest('.node');
   const linkEl = evt.target.closest('.link');
 
-  if (nodeEl) {
+  if (noteEl) {
+    onNoteDown(evt, noteEl.dataset.id, p);
+  } else if (nodeEl) {
     onNodeDown(evt, nodeEl.dataset.id, p);
   } else if (linkEl) {
     if (state.tool === 'delete') {
@@ -218,6 +268,12 @@ svg.addEventListener('pointerdown', evt => {
     const node = addNode(state.tool, p.x, p.y);
     select('node', node.id);
     onTopologyChanged();
+  } else if (state.tool === 'note') {
+    const note = addNote(p.x, p.y);
+    setTool('select');        // one note per click, like Packet Tracer
+    select('note', note.id);
+    onTopologyChanged();
+    focusNoteText();
   } else {
     state.linkStart = null;
     rubberBand.setAttribute('visibility', 'hidden');
@@ -228,9 +284,8 @@ svg.addEventListener('pointerdown', evt => {
 svg.addEventListener('pointermove', evt => {
   const p = svgPoint(evt);
   if (drag) {
-    const node = findNode(drag.id);
-    node.x = Math.round(p.x - drag.dx);
-    node.y = Math.round(p.y - drag.dy);
+    drag.obj.x = Math.round(p.x - drag.dx);
+    drag.obj.y = Math.round(p.y - drag.dy);
     drag.moved = true;
     render();
   } else if (state.linkStart) {
@@ -241,6 +296,11 @@ svg.addEventListener('pointermove', evt => {
     rubberBand.setAttribute('y2', p.y);
     rubberBand.setAttribute('visibility', 'visible');
   }
+});
+
+// Double-click a note to edit its text.
+svg.addEventListener('dblclick', evt => {
+  if (evt.target.closest('.note')) focusNoteText();
 });
 
 svg.addEventListener('pointerup', () => {

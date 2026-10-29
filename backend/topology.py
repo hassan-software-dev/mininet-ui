@@ -222,6 +222,12 @@ def generate_script(topo):
         '',
         'Run with:  sudo python3 <this file>',
         '"""',
+    ]
+    # Notes from the drawing become comments.
+    for note in topo.get('notes') or []:
+        for i, line in enumerate(str(note.get('text', '')).strip().splitlines()):
+            out.append(('# Note: ' if i == 0 else '#       ') + line)
+    out += [
         'from mininet.net import Mininet',
         'from mininet.node import RemoteController, OVSSwitch',
         'from mininet.link import TCLink',

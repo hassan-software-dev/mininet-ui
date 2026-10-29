@@ -68,13 +68,22 @@ function setTool(tool) {
   state.tool = tool;
   state.linkStart = null;
   $('rubber-band').setAttribute('visibility', 'hidden');
-  document.querySelectorAll('#tools button').forEach(b =>
+  document.querySelectorAll('#sidebar [data-tool]').forEach(b =>
     b.classList.toggle('active', b.dataset.tool === tool));
   render();
 }
 
-document.querySelectorAll('#tools button').forEach(b =>
+document.querySelectorAll('#sidebar [data-tool]').forEach(b =>
   b.addEventListener('click', () => setTool(b.dataset.tool)));
+
+// File name shown in the title bar and used for Save/Export, without extension.
+let fileName = 'topology';
+
+function setFileName(name) {
+  fileName = name.replace(/\.(mn|json|py)$/i, '') || 'topology';
+  $('file-name').textContent = fileName;
+  document.title = fileName + ' - Mininet UI';
+}
 
 function download(filename, content, type) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -89,6 +98,7 @@ $('btn-new').addEventListener('click', () => {
   if (state.running) return notify('Stop the network first', 'warn');
   if (state.topo.nodes.length && !confirm('Discard the current topology?')) return;
   setTopology({ nodes: [], links: [] });
+  setFileName('topology');
   onTopologyChanged();
 });
 
@@ -100,23 +110,37 @@ $('file-input').addEventListener('change', async evt => {
   if (!file) return;
   if (state.running) return notify('Stop the network first', 'warn');
   try {
-    setTopology(JSON.parse(await file.text()));
+    const notes = [];
+    setTopology(parseTopologyFile(await file.text(), notes));
+    setFileName(file.name);
     onTopologyChanged();
     notify('Opened ' + file.name, 'ok');
+    notes.forEach(n => notify('Note: ' + n, 'warn'));
   } catch (e) {
     showError(e);
   }
 });
 
+// Save as .mn (MiniEdit's format, opens in MiniEdit too) unless the user
+// types a name ending in .json.
 $('btn-save').addEventListener('click', () => {
-  download('topology.json', JSON.stringify(state.topo, null, 2), 'application/json');
+  const name = prompt('Save as (.mn = MiniEdit format, or .json):', fileName + '.mn');
+  if (!name) return;
+  const file = /\.(mn|json)$/i.test(name) ? name : name + '.mn';
+  if (file.toLowerCase().endsWith('.json')) {
+    download(file, JSON.stringify(state.topo, null, 2), 'application/json');
+  } else {
+    download(file, JSON.stringify(toMiniEdit(state.topo), null, 2), 'application/json');
+  }
+  setFileName(file);
+  notify('Saved ' + file, 'ok');
 });
 
 $('btn-export').addEventListener('click', async () => {
   try {
     const data = await api('/api/export', state.topo);
-    download('topology.py', data.script, 'text/x-python');
-    notify('Exported topology.py (run it with: sudo python3 topology.py)', 'ok');
+    download(fileName + '.py', data.script, 'text/x-python');
+    notify(`Exported ${fileName}.py (run it with: sudo python3 ${fileName}.py)`, 'ok');
   } catch (e) {
     showError(e);
   }
@@ -166,6 +190,31 @@ const FIELDS = {
          ['delay', 'Delay (e.g. 5ms, blank = none)'],
          ['loss', 'Packet loss (%)']],
 };
+
+const KIND_TITLES = { host: 'PC', switch: 'Switch', controller: 'Controller' };
+
+// Multi-line text box for a note's text.
+function addNoteText(body, note) {
+  const wrap = document.createElement('label');
+  wrap.textContent = 'Text';
+  const area = document.createElement('textarea');
+  area.id = 'note-text';
+  area.rows = 6;
+  area.value = note.text;
+  area.addEventListener('input', () => {
+    note.text = area.value;
+    render();
+    persist();
+  });
+  wrap.appendChild(area);
+  body.appendChild(wrap);
+}
+
+// Put the cursor in the selected note's text box, with the text selected.
+function focusNoteText() {
+  const area = $('note-text');
+  if (area) { area.focus(); area.select(); }
+}
 
 function addField(body, obj, key, label) {
   const wrap = document.createElement('label');
@@ -233,20 +282,32 @@ function renderProps() {
   const body = $('props-body');
   body.replaceChildren();
   const sel = state.selected;
-  const obj = sel && (sel.kind === 'node' ? findNode(sel.id) : findLink(sel.id));
+  const find = { node: findNode, link: findLink, note: findNote };
+  const obj = sel && find[sel.kind](sel.id);
+  const title = $('props').querySelector('h2');
   if (!obj) {
+    title.textContent = 'Properties';
     addInfo(body, 'hint', [
-      'Pick a tool, then click the canvas to place hosts, switches and a controller.',
-      'Link tool: click two nodes to connect them.',
-      'Drag nodes to move them. Del deletes the selection, Esc cancels.',
+      'Pick a device on the left, then click the workspace to place it.',
+      'Link tool: click two devices to connect them.',
+      'Drag devices to move them. Del deletes the selection, Esc cancels.',
       'Every switch connects to every controller automatically (dashed lines).',
     ]);
+    return;
+  }
+  if (sel.kind === 'note') {
+    title.textContent = 'Note';
+    addNoteText(body, obj);
+    addInfo(body, 'hint', ['Notes are only for people reading the drawing; ' +
+                           'Mininet ignores them.']);
     return;
   }
   const kind = sel.kind === 'node' ? obj.type : 'link';
   if (kind === 'link') {
     const name = id => (findNode(id) || { name: '?' }).name;
-    addInfo(body, 'hint', [name(obj.src) + ' ↔ ' + name(obj.dst)]);
+    title.textContent = 'Link ' + name(obj.src) + ' ↔ ' + name(obj.dst);
+  } else {
+    title.textContent = KIND_TITLES[kind] + ' ' + obj.name;
   }
   FIELDS[kind].forEach(([key, label]) => addField(body, obj, key, label));
   if (state.running) addInfo(body, 'hint', ['Stop the network to edit properties.']);
@@ -338,9 +399,11 @@ document.addEventListener('keydown', evt => {
   if (evt.key === 'Escape') {
     setTool('select');
   } else if ((evt.key === 'Delete' || evt.key === 'Backspace') && state.selected) {
-    if (editingLocked()) return;
-    if (state.selected.kind === 'node') deleteNode(state.selected.id);
-    else deleteLink(state.selected.id);
+    const { kind, id } = state.selected;
+    if (kind === 'note') deleteNote(id);          // notes are never locked
+    else if (editingLocked()) return;
+    else if (kind === 'node') deleteNode(id);
+    else deleteLink(id);
     onTopologyChanged();
   }
 });

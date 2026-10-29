@@ -1,0 +1,140 @@
+{
+  "application": {
+    "ipBase": "10.0.0.0/8",
+    "terminalType": "xterm",
+    "startCLI": "0",
+    "switchType": "ovs",
+    "dpctl": "",
+    "openFlowVersions": {
+      "ovsOf10": "0",
+      "ovsOf11": "0",
+      "ovsOf12": "0",
+      "ovsOf13": "1"
+    },
+    "sflow": {
+      "sflowTarget": "",
+      "sflowHeader": "128",
+      "sflowSampling": "400",
+      "sflowPolling": "30"
+    },
+    "netflow": {
+      "nflowTarget": "",
+      "nflowTimeout": "600",
+      "nflowAddId": "0"
+    }
+  },
+  "controllers": [
+    {
+      "x": "500",
+      "y": "80",
+      "opts": {
+        "hostname": "c0",
+        "controllerType": "remote",
+        "controllerProtocol": "tcp",
+        "remoteIP": "127.0.0.1",
+        "remotePort": 6653
+      }
+    }
+  ],
+  "hosts": [
+    {
+      "number": "1",
+      "x": "220",
+      "y": "400",
+      "opts": {
+        "hostname": "h1",
+        "nodeNum": 1,
+        "sched": "host",
+        "ip": "10.0.0.1/8",
+        "mac": "00:00:00:00:00:01"
+      }
+    },
+    {
+      "number": "2",
+      "x": "440",
+      "y": "400",
+      "opts": {
+        "hostname": "h2",
+        "nodeNum": 2,
+        "sched": "host",
+        "ip": "10.0.0.2/8",
+        "mac": "00:00:00:00:00:02"
+      }
+    },
+    {
+      "number": "3",
+      "x": "760",
+      "y": "400",
+      "opts": {
+        "hostname": "h3",
+        "nodeNum": 3,
+        "sched": "host",
+        "ip": "10.0.0.3/8",
+        "mac": "00:00:00:00:00:03"
+      }
+    }
+  ],
+  "switches": [
+    {
+      "number": "1",
+      "x": "340",
+      "y": "230",
+      "opts": {
+        "hostname": "s1",
+        "nodeNum": 1,
+        "switchType": "default",
+        "controllers": [
+          "c0"
+        ],
+        "dpid": "0000000000000001"
+      }
+    },
+    {
+      "number": "2",
+      "x": "660",
+      "y": "230",
+      "opts": {
+        "hostname": "s2",
+        "nodeNum": 2,
+        "switchType": "default",
+        "controllers": [
+          "c0"
+        ],
+        "dpid": "0000000000000002"
+      }
+    }
+  ],
+  "links": [
+    {
+      "src": "s1",
+      "dest": "s2",
+      "opts": {
+        "bw": 100,
+        "delay": "2ms"
+      }
+    },
+    {
+      "src": "h1",
+      "dest": "s1",
+      "opts": {
+        "bw": 10
+      }
+    },
+    {
+      "src": "h2",
+      "dest": "s1",
+      "opts": {
+        "bw": 10
+      }
+    },
+    {
+      "src": "h3",
+      "dest": "s2",
+      "opts": {
+        "bw": 10,
+        "delay": "5ms"
+      }
+    }
+  ],
+  "version": "2.2.0.1"
+}

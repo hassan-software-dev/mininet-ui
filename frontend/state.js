@@ -5,9 +5,9 @@
 const STORAGE_KEY = 'mininet-ui.topology';
 
 const state = {
-  topo: { nodes: [], links: [] },
-  tool: 'select',        // select | host | switch | controller | link | delete
-  selected: null,        // { kind: 'node' | 'link', id }
+  topo: { nodes: [], links: [], notes: [] },
+  tool: 'select',        // select | host | switch | controller | link | note | delete
+  selected: null,        // { kind: 'node' | 'link' | 'note', id }
   linkStart: null,       // node id while drawing a link
   running: false,        // network is running on the backend
   live: null,            // last controller snapshot (live view), or null
@@ -100,9 +100,27 @@ function setTopology(topo) {
   if (!topo || !Array.isArray(topo.nodes) || !Array.isArray(topo.links)) {
     throw new Error('Not a topology file (needs "nodes" and "links" arrays)');
   }
-  state.topo = { nodes: topo.nodes, links: topo.links };
+  state.topo = { nodes: topo.nodes, links: topo.links,
+                 notes: Array.isArray(topo.notes) ? topo.notes : [] };
   state.selected = null;
   state.linkStart = null;
+}
+
+// Text notes on the workspace (like Packet Tracer's "Place Note"). They are
+// only for people reading the drawing; Mininet ignores them.
+function findNote(id) {
+  return state.topo.notes.find(n => n.id === id);
+}
+
+function addNote(x, y) {
+  const note = { id: newId('t'), x: Math.round(x), y: Math.round(y), text: 'Note' };
+  state.topo.notes.push(note);
+  return note;
+}
+
+function deleteNote(id) {
+  state.topo.notes = state.topo.notes.filter(n => n.id !== id);
+  if (state.selected && state.selected.id === id) state.selected = null;
 }
 
 // Keep the work-in-progress across page reloads.
