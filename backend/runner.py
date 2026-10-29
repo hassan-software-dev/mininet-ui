@@ -47,8 +47,9 @@ class NetworkRunner:
         if self.lock.acquire(timeout=0.2):
             try:
                 if self.net is not None:
-                    self._connected = {s.name: bool(s.connected())
-                                       for s in self.net.switches}
+                    # Only switches linked to a controller can connect.
+                    self._connected = {s['name']: bool(self.net.get(s['name']).connected())
+                                       for s in self.spec['switches'] if s['controllers']}
             finally:
                 self.lock.release()
         return self._connected
@@ -78,7 +79,13 @@ class NetworkRunner:
                     net.addHost(h['name'], **params)
                 for l in spec['links']:
                     net.addLink(l['src'], l['dst'], **l['opts'])
-                net.start()
+                # Not net.start(): that connects every switch to every
+                # controller. Each switch gets only the ones it's linked to.
+                net.build()
+                for c in net.controllers:
+                    c.start()
+                for s in spec['switches']:
+                    net.get(s['name']).start([net.get(c) for c in s['controllers']])
             except Exception:
                 try:
                     net.stop()
@@ -87,10 +94,16 @@ class NetworkRunner:
                 raise
             self.net, self.spec = net, spec
 
-            if spec['controllers'] and spec['switches']:
-                if not net.waitConnected(timeout=10):
-                    warnings.append('Some switches did not connect to the '
-                                    'controller within 10 s (is it running?)')
+            # Wait up to 10 s for the switches that have a controller.
+            controlled = [net.get(s['name']) for s in spec['switches'] if s['controllers']]
+            deadline = time.time() + 10
+            while controlled and time.time() < deadline:
+                controlled = [s for s in controlled if not s.connected()]
+                if controlled:
+                    time.sleep(0.5)
+            if controlled:
+                warnings.append('%s did not connect to the controller within 10 s '
+                                '(is it running?)' % ', '.join(s.name for s in controlled))
         return warnings
 
     def stop(self):

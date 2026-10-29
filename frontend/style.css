@@ -185,7 +185,11 @@ main {
 #canvas.tool-note { cursor: text; }
 #canvas.tool-delete .note { cursor: not-allowed; }
 
-#layer-control line { stroke: #7c3aed; stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.45; }
+/* control links (switch <-> controller): dashed purple, green/red when running */
+.link.control line.wire { stroke: #7c3aed; stroke-width: 1.6; stroke-dasharray: 6 4; }
+.link.control.up line.wire { stroke: var(--up); }
+.link.control.down line.wire { stroke: var(--down); }
+.link.control.selected line.wire { stroke: var(--accent); stroke-width: 2.5; }
 #rubber-band { stroke: var(--wire); stroke-width: 1.6; stroke-dasharray: 5 4; pointer-events: none; }
 
 #props {

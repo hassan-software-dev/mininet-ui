@@ -4,7 +4,6 @@
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svg = document.getElementById('canvas');
-const layerControl = document.getElementById('layer-control');
 const layerLinks = document.getElementById('layer-links');
 const layerNodes = document.getElementById('layer-nodes');
 const rubberBand = document.getElementById('rubber-band');
@@ -19,6 +18,26 @@ function el(tag, attrs, parent) {
   for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
   if (parent) parent.appendChild(e);
   return e;
+}
+
+// Draw icon artwork (a <symbol> at the top of index.html) as a plain copy of
+// its shapes. We don't use <use href="#...">: WebKitGTK, which runs the
+// desktop window, sometimes stops drawing <use> icons after a resize.
+function icon(symbolId, attrs, parent) {
+  const symbol = document.getElementById(symbolId);
+  const e = el('svg', Object.assign({ viewBox: symbol.getAttribute('viewBox') }, attrs), parent);
+  for (const child of symbol.children) e.appendChild(child.cloneNode(true));
+  return e;
+}
+
+// Replace each toolbar/palette <svg class="icon"><use href="#x"/></svg>
+// with a copy of the icon itself (see icon() above). Run once at start-up.
+function inlineIcons() {
+  document.querySelectorAll('svg.icon > use').forEach(use => {
+    const holder = use.parentNode;
+    const copy = icon(use.getAttribute('href').slice(1), { class: holder.getAttribute('class') });
+    holder.replaceWith(copy);
+  });
 }
 
 function text(parent, x, y, cls, content) {
@@ -57,9 +76,11 @@ function controllerConnections() {
 // network runs; the live view (if on) adds what the controller itself sees.
 function nodeStatus(node) {
   if (node.type === 'controller') {
-    const { up, total } = controllerConnections();
-    if (!state.running || !total) return null;
-    return up === total ? 'up' : up === 0 ? 'down' : 'pending';
+    // Only this controller's own switches (those with a control link to it).
+    const mine = switchesOf(node).filter(s => s.name in state.connected);
+    if (!state.running || !mine.length) return null;
+    const up = mine.filter(s => state.connected[s.name]).length;
+    return up === mine.length ? 'up' : up === 0 ? 'down' : 'pending';
   }
   const o = state.live;
   if (node.type === 'switch' && (!o || !o.ok)) {
@@ -118,7 +139,7 @@ function drawNode(node) {
   const { w, h } = ICON_SIZE[node.type];
   el('rect', { class: 'halo', x: -w / 2 - 6, y: -h / 2 - 5, width: w + 12,
                height: h + 10, rx: 4 }, g);
-  el('use', { href: '#dev-' + node.type, x: -w / 2, y: -h / 2, width: w, height: h }, g);
+  icon('dev-' + node.type, { x: -w / 2, y: -h / 2, width: w, height: h }, g);
   text(g, 0, h / 2 + 14, 'name', node.name);
   text(g, 0, h / 2 + 27, 'sub', subtitle(node));
 
@@ -134,6 +155,25 @@ function linkLight(link) {
   return linkStatus(link) === 'down' ? 'pending' : 'up';
 }
 
+// The switch at one end of a link, or undefined.
+function switchOf(link) {
+  return [findNode(link.src), findNode(link.dst)].find(n => n && n.type === 'switch');
+}
+
+// Control link colour while running: is its switch connected (per OVS)?
+function controlLinkStatus(link) {
+  const sw = switchOf(link);
+  if (!state.running || !sw || !(sw.name in state.connected)) return null;
+  return state.connected[sw.name] ? 'up' : 'down';
+}
+
+// Switches that have a control link to this controller.
+function switchesOf(controller) {
+  return state.topo.links
+    .filter(l => isControlLink(l) && (l.src === controller.id || l.dst === controller.id))
+    .map(switchOf).filter(Boolean);
+}
+
 function linkLabel(link) {
   const parts = [];
   if (link.bw !== '' && link.bw != null) parts.push(link.bw + ' Mb/s');
@@ -147,10 +187,13 @@ function drawLink(link) {
   if (!a || !b) return;
   const cls = ['link'];
   if (state.selected && state.selected.id === link.id) cls.push('selected');
+  const control = isControlLink(link);
+  if (control) cls.push('control', controlLinkStatus(link) || '');
   const g = el('g', { class: cls.join(' '), 'data-id': link.id }, layerLinks);
   const pts = { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
   el('line', Object.assign({ class: 'wire' }, pts), g);
   el('line', Object.assign({ class: 'hit' }, pts), g);   // wide invisible click target
+  if (control) return;          // no port lights or settings on control links
 
   // Port lights just outside each device icon.
   const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
@@ -162,20 +205,9 @@ function drawLink(link) {
   if (label) text(g, (a.x + b.x) / 2, (a.y + b.y) / 2 - 6, '', label);
 }
 
-// Dashed lines from each controller to every switch (not real links).
-function drawControlLines() {
-  for (const c of nodesOfType('controller')) {
-    for (const s of nodesOfType('switch')) {
-      el('line', { x1: c.x, y1: c.y, x2: s.x, y2: s.y }, layerControl);
-    }
-  }
-}
-
 function render() {
-  layerControl.replaceChildren();
   layerLinks.replaceChildren();
   layerNodes.replaceChildren();
-  drawControlLines();
   layerNotes.replaceChildren();
   state.topo.links.forEach(drawLink);
   state.topo.nodes.forEach(drawNode);
@@ -283,6 +315,9 @@ svg.addEventListener('pointerdown', evt => {
   } else if (['host', 'switch', 'controller'].includes(state.tool)) {
     if (editingLocked()) return;
     const node = addNode(state.tool, p.x, p.y);
+    // Back to Select after placing, as in Packet Tracer; hold Ctrl or Shift
+    // to place several of the same device.
+    if (!evt.ctrlKey && !evt.shiftKey) setTool('select');
     select('node', node.id);
     onTopologyChanged();
   } else if (state.tool === 'note') {
@@ -320,7 +355,12 @@ svg.addEventListener('dblclick', evt => {
   if (evt.target.closest('.note')) focusNoteText();
 });
 
-svg.addEventListener('pointerup', () => {
+// End a drag however it ends: button released, or the pointer lost (e.g.
+// released outside the window), so a device never stays stuck to the mouse.
+function endDrag() {
   if (drag && drag.moved) persist();
   drag = null;
-});
+}
+svg.addEventListener('pointerup', endDrag);
+svg.addEventListener('pointercancel', endDrag);
+svg.addEventListener('lostpointercapture', endDrag);

@@ -38,18 +38,24 @@ function toMiniEdit(topo) {
   const byType = type => topo.nodes.filter(n => n.type === type);
   const name = id => (topo.nodes.find(n => n.id === id) || {}).name;
   const pos = n => ({ x: String(n.x), y: String(n.y) });
+  const isControl = l => [l.src, l.dst].some(id =>
+    (topo.nodes.find(n => n.id === id) || {}).type === 'controller');
 
   const controllers = byType('controller').map(c => Object.assign(pos(c), {
     opts: { hostname: c.name, controllerType: 'remote', controllerProtocol: 'tcp',
             remoteIP: c.ip || '127.0.0.1', remotePort: Number(c.port) || 6653 },
   }));
-  const ctlNames = controllers.map(c => c.opts.hostname);
+
+  // MiniEdit keeps control links as each switch's list of controller names.
+  const controllersOf = sw => topo.links
+    .filter(l => isControl(l) && (l.src === sw.id || l.dst === sw.id))
+    .map(l => name(l.src === sw.id ? l.dst : l.src));
 
   const swNums = nodeNumbers(byType('switch'));
   const switches = byType('switch').map(s => {
     const num = swNums.get(s.id);
     const opts = { hostname: s.name, nodeNum: num, switchType: 'default',
-                   controllers: ctlNames };
+                   controllers: controllersOf(s) };
     if (s.dpid) opts.dpid = s.dpid;
     return Object.assign({ number: String(num) }, pos(s), { opts });
   });
@@ -63,7 +69,7 @@ function toMiniEdit(topo) {
     return Object.assign({ number: String(num) }, pos(h), { opts });
   });
 
-  const links = topo.links.map(l => {
+  const links = topo.links.filter(l => !isControl(l)).map(l => {
     const opts = {};
     for (const key of ['bw', 'delay', 'loss']) {
       if (l[key] !== '' && l[key] != null) opts[key] = numberOrString(l[key]);
@@ -116,6 +122,13 @@ function fromMiniEdit(data, notes) {
       notes.push(`${name}: MiniEdit "${o.switchType}" loaded as an OpenFlow switch`);
     }
     place('switch', s, { name, dpid: o.dpid || hex(num, 16) });
+    // The switch's controllers become control links.
+    for (const ctl of o.controllers || []) {
+      if (idByName[ctl]) {
+        links.push({ id: newId('l'), src: idByName[name], dst: idByName[ctl],
+                     bw: '', delay: '', loss: '' });
+      }
+    }
   }
 
   for (const h of data.hosts || []) {
@@ -141,7 +154,8 @@ function fromMiniEdit(data, notes) {
     id: newId('t'), x: Math.round(Number(n.x) || 0), y: Math.round(Number(n.y) || 0),
     text: String(n.text || ''),
   }));
-  return { nodes, links, notes: textNotes };
+  // Control links come from the file, so no automatic ones (see setTopology).
+  return { version: TOPOLOGY_VERSION, nodes, links, notes: textNotes };
 }
 
 // Parse the text of an opened file (.mn or .json) into our topology.

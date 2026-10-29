@@ -35,7 +35,7 @@ DELAY_RE = re.compile(r'^\d+(\.\d+)?(us|ms|s)$')
 # Node names become variable names in the exported script, so they must not
 # clash with Python keywords or names the script itself uses.
 RESERVED_NAMES = set(keyword.kwlist) | {
-    'net', 'info', 'build', 'CLI', 'Mininet', 'TCLink', 'OVSSwitch',
+    'net', 'info', 'build', 'start_network', 'CLI', 'Mininet', 'TCLink', 'OVSSwitch',
     'RemoteController', 'setLogLevel'}
 
 DEFAULT_PREFIX = 8          # same as Mininet's default ipBase 10.0.0.0/8
@@ -145,7 +145,8 @@ def normalize(topo):
                 elif dpid in dpids:
                     errors.append('%s: duplicate DPID %s' % (name, dpid))
                 dpids.add(dpid)
-            spec['switches'].append({'name': name, 'dpid': dpid})
+            # 'controllers' is filled in from the control links below.
+            spec['switches'].append({'name': name, 'dpid': dpid, 'controllers': []})
 
         else:  # controller
             ip = str(node.get('ip') or '127.0.0.1').strip()
@@ -174,8 +175,15 @@ def normalize(topo):
             errors.append('%s: cannot connect a node to itself' % label)
             continue
         if 'controller' in (a['type'], b['type']):
-            errors.append('%s: controllers are not linked; every switch '
-                          'connects to every controller automatically' % label)
+            # A control link: the switch connects to this controller.
+            types = sorted((a['type'], b['type']))
+            if types != ['controller', 'switch']:
+                errors.append('%s: a controller can only be linked to a switch' % label)
+                continue
+            sw, ctl = (a, b) if a['type'] == 'switch' else (b, a)
+            sw_spec = next(s for s in spec['switches'] if s['name'] == sw['name'])
+            if ctl['name'] not in sw_spec['controllers']:
+                sw_spec['controllers'].append(ctl['name'])
             continue
         opts = {}
         bw = _number(link.get('bw'), 'bandwidth', label, errors, 0.001, MAX_BW_MBPS)
@@ -200,6 +208,12 @@ def normalize(topo):
             warnings.append('%s is not connected to anything' % host['name'])
     if spec['switches'] and not spec['controllers']:
         warnings.append('No controller: switches will have no flow rules')
+    else:
+        for sw in spec['switches']:
+            if not sw['controllers']:
+                warnings.append('%s is not linked to a controller, so it will not '
+                                'forward traffic (draw a link from it to the '
+                                'controller)' % sw['name'])
     if not spec['hosts'] and not spec['switches']:
         errors.append('Topology is empty')
 
@@ -235,7 +249,7 @@ def generate_script(topo):
         'from mininet.log import setLogLevel, info',
         '',
         '',
-        'def build():',
+        'def start_network():',
         '    net = Mininet(controller=None, switch=OVSSwitch, link=TCLink,',
         '                  autoSetMacs=False, build=False)',
         '',
@@ -257,15 +271,19 @@ def generate_script(topo):
     for l in spec['links']:
         args = ', ' + _kwargs(sorted(l['opts'].items())) if l['opts'] else ''
         out.append('    net.addLink(%s, %s%s)' % (l['src'], l['dst'], args))
+    # Not net.start(): that would connect every switch to every controller.
+    out += ['', '    net.build()', "    info('*** Starting controllers\\n')"]
+    out += ['    %s.start()' % c['name'] for c in spec['controllers']]
+    out += ["    info('*** Starting switches (each with the controllers it is linked to)\\n')"]
+    out += ['    %s.start([%s])' % (s['name'], ', '.join(s['controllers']))
+            for s in spec['switches']]
     out += [
-        '',
         '    return net',
         '',
         '',
         "if __name__ == '__main__':",
         "    setLogLevel('info')",
-        '    net = build()',
-        '    net.start()',
+        '    net = start_network()',
         '    CLI(net)',
         '    net.stop()',
         '',

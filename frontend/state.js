@@ -3,9 +3,11 @@
 // backend (see backend/topology.py for the format).
 
 const STORAGE_KEY = 'mininet-ui.topology';
+// 2: switches connect only to controllers they have a link to.
+const TOPOLOGY_VERSION = 2;
 
 const state = {
-  topo: { nodes: [], links: [], notes: [] },
+  topo: { version: TOPOLOGY_VERSION, nodes: [], links: [], notes: [] },
   tool: 'select',        // select | host | switch | controller | link | note | delete
   selected: null,        // { kind: 'node' | 'link' | 'note', id }
   linkStart: null,       // node id while drawing a link
@@ -79,11 +81,25 @@ function addLink(srcId, dstId) {
   const a = findNode(srcId), b = findNode(dstId);
   if (!a || !b || a === b) return 'Pick two different nodes';
   if (a.type === 'controller' || b.type === 'controller') {
-    return 'Controllers are connected to every switch automatically';
+    // A control link: the switch will connect to this controller.
+    if (!(a.type === 'switch' || b.type === 'switch') || a.type === b.type) {
+      return 'A controller can only be linked to a switch';
+    }
+    if (state.topo.links.some(l => (l.src === a.id && l.dst === b.id) ||
+                                   (l.src === b.id && l.dst === a.id))) {
+      return 'This switch is already linked to this controller';
+    }
   }
   const link = { id: newId('l'), src: a.id, dst: b.id, bw: '', delay: '', loss: '' };
   state.topo.links.push(link);
   return link;
+}
+
+// A link between a switch and a controller (OpenFlow control channel),
+// as opposed to a data link that carries traffic.
+function isControlLink(link) {
+  const a = findNode(link.src), b = findNode(link.dst);
+  return !!(a && b) && (a.type === 'controller' || b.type === 'controller');
 }
 
 function deleteNode(id) {
@@ -101,8 +117,15 @@ function setTopology(topo) {
   if (!topo || !Array.isArray(topo.nodes) || !Array.isArray(topo.links)) {
     throw new Error('Not a topology file (needs "nodes" and "links" arrays)');
   }
-  state.topo = { nodes: topo.nodes, links: topo.links,
+  state.topo = { version: TOPOLOGY_VERSION, nodes: topo.nodes, links: topo.links,
                  notes: Array.isArray(topo.notes) ? topo.notes : [] };
+  // Before version 2 every switch was linked to every controller
+  // automatically; add those control links so old files work the same.
+  if (!topo.version) {
+    for (const c of nodesOfType('controller')) {
+      for (const s of nodesOfType('switch')) addLink(s.id, c.id);
+    }
+  }
   state.selected = null;
   state.linkStart = null;
 }

@@ -15,7 +15,13 @@ import signal
 import sys
 import urllib.request
 
-import gi
+# GPU-accelerated drawing in WebKitGTK is glitchy in virtual machines
+# (VirtualBox): parts of the page, such as icons, vanish after resizing or
+# going full screen. Software drawing is plenty fast for this page.
+# Must be set before WebKit is loaded.
+os.environ.setdefault('WEBKIT_DISABLE_COMPOSITING_MODE', '1')
+
+import gi  # noqa: E402
 gi.require_version('Gtk', '3.0')
 try:
     gi.require_version('WebKit2', '4.1')     # Ubuntu 24.04
@@ -61,6 +67,9 @@ class Window(Gtk.Window):
         manager.register_script_message_handler('mininetui')
         manager.connect('script-message-received::mininetui', self.on_message)
         self.view = WebKit2.WebView.new_with_user_content_manager(manager)
+        settings = self.view.get_settings()
+        if hasattr(WebKit2, 'HardwareAccelerationPolicy'):   # see the note at the top
+            settings.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
         self.view.load_uri(URL)
         self.add(self.view)
         self.connect('delete-event', self.on_close)

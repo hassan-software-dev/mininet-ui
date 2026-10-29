@@ -112,7 +112,7 @@ The numbers match the picture at the top of this page.
 | **PC** | A computer (a Mininet *host*). |
 | **Switch** | An OpenFlow switch. It forwards traffic the way the controller tells it to. |
 | **Controller** | The SDN controller (ONOS or OpenDaylight) that manages the switches. |
-| **Link** | A cable. Click one device, then another, to connect them. |
+| **Link** | A cable. Click one device, then another, to connect them. Also use it to link each switch to the controller. |
 
 </td>
 </tr>
@@ -132,11 +132,14 @@ Let's build two PCs connected through one switch.
 
 1. Click **Controller** in the palette, then click near the top of the workspace.
 2. Click **Switch**, then click in the middle of the workspace.
-3. Click **PC**, then click twice below the switch to place two PCs.
+3. Click **PC**, then click below the switch. Click **PC** again and place
+   the second one. (Hold `Ctrl` while clicking to place several in a row.)
 4. Click **Link** (the lightning bolt). Click the first PC, then the switch.
    A dashed line follows your mouse until you click the second device.
 5. Do the same for the second PC.
-6. Click **Select** (or press `Esc`) when you're done.
+6. **Link the switch to the controller**: still with **Link**, click the
+   switch, then the controller. This link is drawn as a dashed purple line.
+7. Click **Select** (or press `Esc`) when you're done.
 
 ![Drawing a link](docs/screenshots/02-drawing-link.png)
 
@@ -144,8 +147,11 @@ Good to know:
 
 - Every new device gets sensible settings automatically: PCs are named
   `h1`, `h2`... with addresses `10.0.0.1`, `10.0.0.2`...; switches are `s1`, `s2`...
-- **You don't draw links to the controller.** Every switch is connected to every
-  controller automatically, shown as thin dashed purple lines.
+- After placing a device, the tool goes back to **Select**, as in Packet Tracer.
+- **Every switch needs a link to a controller** (dashed purple line). A switch
+  without one won't forward any traffic, and **Run** warns you about it.
+  Controllers can only be linked to switches. While the network runs, the
+  dashed line turns 🟢 green when that switch is connected, 🔴 red when not.
 - The small dots at each end of a link are **port lights**, like in Packet Tracer:
 
   | Light | Meaning |
@@ -294,11 +300,18 @@ instructions) the controller has installed in it:
   with Mininet). You can open your files in MiniEdit, and open old MiniEdit
   files here. Settings this tool doesn't use (such as MiniEdit's built-in
   controllers or legacy switches) are converted, and the console tells you what changed.
-- Type a name ending in **`.json`** in the Save box to save in this tool's own format instead.
+  Links from switches to controllers are kept, as in MiniEdit.
+- To save in this tool's own format instead, pick **Topology JSON** in the
+  Save dialog (or type a name ending in **`.json`**).
 - To run an exported script yourself: `sudo python3 my-network.py`. It opens
-  the Mininet command line (`mininet>`); type `exit` to stop it.
+  the Mininet command line (`mininet>`); type `exit` to stop it. Each switch
+  connects only to the controllers it is linked to, just like **Run**.
+- Files made with older versions of this tool (before controller links had
+  to be drawn) get a link from every switch to every controller when you
+  open them, so they work as before.
 
-Downloaded files go to your **Downloads** folder.
+In the app, a **Save** dialog asks where to put the file. In a browser
+(`./run.sh --browser`), files go to your **Downloads** folder.
 
 ## 9. Keyboard shortcuts
 
@@ -331,6 +344,8 @@ The controller isn't running or isn't reachable.
 - OpenDaylight: install the OpenFlow plugin in its console:
   `feature:install odl-openflowplugin-flow-services-rest`.
 - The controller's IP and port in Properties should be `127.0.0.1` and `6653`.
+- Check the switch has a **link to the controller** (dashed purple line).
+  Switches without one are left out of the count and never connect.
 
 **Ping all shows `X` / 100% dropped.**
 The switches are connected but nobody tells them how to forward traffic.

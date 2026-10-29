@@ -34,8 +34,11 @@ class NormalizeTests(unittest.TestCase):
         spec, warnings = normalize(topo(
             [H1, H2, S1, C0],
             [{'id': 'l1', 'src': 'a', 'dst': 'c', 'bw': '10', 'delay': '5', 'loss': ''},
-             {'id': 'l2', 'src': 'b', 'dst': 'c'}]))
+             {'id': 'l2', 'src': 'b', 'dst': 'c'},
+             {'id': 'l3', 'src': 'd', 'dst': 'c'}]))      # control link c0-s1
         self.assertEqual(warnings, [])
+        self.assertEqual(spec['switches'][0]['controllers'], ['c0'])
+        self.assertEqual(len(spec['links']), 2)               # control link isn't a data link
         self.assertEqual(spec['hosts'][0]['ip'], '10.0.0.1/8')     # default prefix
         self.assertEqual(spec['switches'][0]['dpid'], '0000000000000001')
         self.assertEqual(spec['controllers'][0]['port'], 6653)
@@ -63,9 +66,14 @@ class NormalizeTests(unittest.TestCase):
         self.assertIn('delay must look like', msg)
         self.assertIn('loss must be a number', msg)
 
-    def test_controller_links_rejected(self):
-        msg = self.errors(topo([S1, C0], [{'id': 'l', 'src': 'c', 'dst': 'd'}]))
-        self.assertIn('controllers are not linked', msg)
+    def test_controller_only_links_to_switches(self):
+        msg = self.errors(topo([H1, S1, C0], [{'id': 'l', 'src': 'a', 'dst': 'd'}]))
+        self.assertIn('a controller can only be linked to a switch', msg)
+
+    def test_switch_without_control_link_warns(self):
+        _, warnings = normalize(topo([H1, S1, C0], [{'id': 'l', 'src': 'a', 'dst': 'c'}]))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('s1 is not linked to a controller', warnings[0])
 
     def test_warnings(self):
         _, warnings = normalize(topo([H1, S1]))
@@ -82,6 +90,9 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("protocols='OpenFlow13'", script)
         self.assertIn('controller=RemoteController', script)
         self.assertIn('net.addLink(s1, s2, bw=100, delay=\'2ms\')', script)
+        self.assertIn('    c0.start()\n', script)
+        self.assertIn('    s1.start([c0])\n', script)
+        self.assertNotIn('net.start()', script)     # would link every switch to every controller
 
     def test_notes_become_comments(self):
         t = topo([H1, S1], [{'id': 'l', 'src': 'a', 'dst': 'c'}])

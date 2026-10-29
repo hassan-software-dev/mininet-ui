@@ -97,7 +97,7 @@ function download(filename, content, type) {
 $('btn-new').addEventListener('click', () => {
   if (state.running) return notify('Stop the network first', 'warn');
   if (state.topo.nodes.length && !confirm('Discard the current topology?')) return;
-  setTopology({ nodes: [], links: [] });
+  setTopology({ version: TOPOLOGY_VERSION, nodes: [], links: [] });
   setFileName('topology');
   onTopologyChanged();
 });
@@ -272,18 +272,20 @@ function addInfo(body, cls, lines) {
 function liveInfo(node) {
   const o = state.live;
   if (node.type === 'controller') {
-    if (!state.running) return null;
-    const names = Object.keys(state.connected);
-    if (!names.length) return ['Checking connections...'];
+    const names = switchesOf(node).map(s => s.name);
+    if (!names.length) return ['No switches linked to this controller yet.'];
+    if (!state.running) return ['Linked switches: ' + names.join(', ')];
+    if (!names.some(n => n in state.connected)) return ['Checking connections...'];
     const up = names.filter(n => state.connected[n]), down = names.filter(n => !state.connected[n]);
     const lines = [down.length ? `Connected: ${up.length} of ${names.length} switches`
-                               : 'Connected to all switches'];
+                               : 'Connected to all its switches'];
     if (up.length) lines.push('Connected: ' + up.join(', '));
     if (down.length) lines.push('Not connected: ' + down.join(', '));
     return lines;
   }
   if (!o || !o.ok) {
-    if (node.type !== 'switch' || !state.running || !(node.name in state.connected)) return null;
+    if (node.type !== 'switch' || !state.running) return null;
+    if (!(node.name in state.connected)) return ['Not linked to a controller'];
     return [state.connected[node.name] ? 'Connected to the controller'
                                        : 'Not connected to the controller'];
   }
@@ -334,7 +336,8 @@ function renderProps() {
       'Pick a device on the left, then click the workspace to place it.',
       'Link tool: click two devices to connect them.',
       'Drag devices to move them. Del deletes the selection, Esc cancels.',
-      'Every switch connects to every controller automatically (dashed lines).',
+      'Link each switch to a controller too (dashed purple line), or it ' +
+        'won’t forward traffic.',
     ]);
     return;
   }
@@ -349,6 +352,16 @@ function renderProps() {
   if (kind === 'link') {
     const name = id => (findNode(id) || { name: '?' }).name;
     title.textContent = 'Link ' + name(obj.src) + ' ↔ ' + name(obj.dst);
+    if (isControlLink(obj)) {
+      const sw = switchOf(obj);
+      title.textContent = 'Control link ' + name(obj.src) + ' ↔ ' + name(obj.dst);
+      addInfo(body, 'hint', [
+        `${sw ? sw.name : 'The switch'} connects to this controller over OpenFlow ` +
+          'when the network runs. Control links have no settings.',
+        'Delete the link to disconnect them.',
+      ]);
+      return;
+    }
   } else {
     title.textContent = KIND_TITLES[kind] + ' ' + obj.name;
   }
@@ -442,6 +455,7 @@ document.addEventListener('keydown', evt => {
   if (evt.key === 'Escape') {
     setTool('select');
   } else if ((evt.key === 'Delete' || evt.key === 'Backspace') && state.selected) {
+    evt.preventDefault();     // e.g. Backspace = "go back" in some web views
     const { kind, id } = state.selected;
     if (kind === 'note') deleteNote(id);          // notes are never locked
     else if (editingLocked()) return;
@@ -534,6 +548,7 @@ $('live-source').addEventListener('change', () => {
 
 // ---- start up ----------------------------------------------------------------
 
+inlineIcons();
 restore();
 onTopologyChanged();
 pollStatus();
