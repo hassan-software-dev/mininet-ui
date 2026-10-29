@@ -25,42 +25,51 @@ function text(parent, x, y, cls, content) {
   return t;
 }
 
-// ---- ONOS live status ------------------------------------------------
+// ---- live status from the controller (ONOS or OpenDaylight) -------------
+// The backend reports everything keyed by DPID (16 lower-case hex digits),
+// whichever controller it came from (see backend/controllers.py).
 
-function onosDeviceId(sw) {
-  return 'of:' + String(sw.dpid || '').toLowerCase().padStart(16, '0');
+function dpidOf(sw) {
+  return String(sw.dpid || '').toLowerCase().replace(/^0x/, '').padStart(16, '0');
+}
+
+function liveHost(host) {
+  const mac = String(host.mac || '').toLowerCase();
+  return state.live.hosts.find(h => h.mac === mac);
+}
+
+// No hosts at all means "unknown", not "down": hosts only show up after
+// traffic, and OpenDaylight without l2switch never reports them.
+function hostsKnown() {
+  return state.live.hosts.length > 0;
 }
 
 // 'up' / 'down' for a node, or null when the live view is off.
 function nodeStatus(node) {
-  const o = state.onos;
+  const o = state.live;
   if (!o || !o.ok) return null;
   if (node.type === 'switch') {
-    const dev = o.devices.find(d => d.id === onosDeviceId(node));
+    const dev = o.devices.find(d => d.dpid === dpidOf(node));
     return dev && dev.available ? 'up' : 'down';
   }
-  if (node.type === 'host') {
-    const mac = String(node.mac || '').toLowerCase();
-    return o.hosts.some(h => h.mac === mac) ? 'up' : 'down';
-  }
+  if (node.type === 'host' && hostsKnown()) return liveHost(node) ? 'up' : 'down';
   return null;
 }
 
 function linkStatus(link) {
-  const o = state.onos;
+  const o = state.live;
   if (!o || !o.ok) return null;
   const a = findNode(link.src), b = findNode(link.dst);
   if (a.type === 'switch' && b.type === 'switch') {
-    const da = onosDeviceId(a), db = onosDeviceId(b);
+    const da = dpidOf(a), db = dpidOf(b);
     const found = o.links.some(l => (l.src === da && l.dst === db) ||
                                     (l.src === db && l.dst === da));
     return found ? 'up' : 'down';
   }
   const host = a.type === 'host' ? a : b, sw = a.type === 'switch' ? a : b;
-  if (host.type !== 'host' || sw.type !== 'switch') return null;
-  const mac = String(host.mac || '').toLowerCase();
-  const h = o.hosts.find(x => x.mac === mac);
-  const found = h && h.locations.some(l => l.device === onosDeviceId(sw));
+  if (host.type !== 'host' || sw.type !== 'switch' || !hostsKnown()) return null;
+  const h = liveHost(host);
+  const found = h && h.locations.some(l => l.dpid === dpidOf(sw));
   return found ? 'up' : 'down';
 }
 

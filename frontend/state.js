@@ -10,7 +10,7 @@ const state = {
   selected: null,        // { kind: 'node' | 'link', id }
   linkStart: null,       // node id while drawing a link
   running: false,        // network is running on the backend
-  onos: null,            // last ONOS snapshot (live view), or null
+  live: null,            // last controller snapshot (live view), or null
 };
 
 let idCounter = 0;

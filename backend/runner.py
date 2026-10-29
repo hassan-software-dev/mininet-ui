@@ -75,7 +75,7 @@ class NetworkRunner:
             if spec['controllers'] and spec['switches']:
                 if not net.waitConnected(timeout=10):
                     warnings.append('Some switches did not connect to the '
-                                    'controller within 10 s (is ONOS running?)')
+                                    'controller within 10 s (is it running?)')
         return warnings
 
     def stop(self):

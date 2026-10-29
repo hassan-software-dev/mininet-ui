@@ -33,10 +33,15 @@
     </div>
 
     <div class="group">
-      <label title="Poll ONOS every 3 s and colour the canvas">
-        <input type="checkbox" id="onos-live"> ONOS live view
+      <label title="Poll the controller's REST API every 3 s and colour the canvas">
+        Live view
+        <select id="live-source">
+          <option value="">off</option>
+          <option value="onos">ONOS</option>
+          <option value="odl">OpenDaylight</option>
+        </select>
       </label>
-      <span id="onos-status" class="muted"></span>
+      <span id="live-status" class="muted"></span>
     </div>
   </header>
 

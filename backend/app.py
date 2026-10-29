@@ -12,7 +12,7 @@ import sys
 
 from flask import Flask, jsonify, request, send_from_directory
 
-import onos
+import controllers
 from runner import NetworkRunner, RunnerError
 from topology import TopologyError, generate_script, normalize
 
@@ -114,12 +114,18 @@ def iperf():
     return jsonify(output=runner.iperf(data.get('src', ''), data.get('dst', '')))
 
 
-@app.get('/api/onos')
-def onos_view():
+@app.get('/api/live')
+def live():
+    """What the controller sees. ?controller=onos (default) or odl."""
+    kind = request.args.get('controller', 'onos')
+    if kind not in controllers.CONTROLLERS:
+        return error('Unknown controller %r' % kind)
+    ctl = controllers.CONTROLLERS[kind]
     try:
-        return jsonify(ok=True, **onos.snapshot())
-    except Exception as e:      # ONOS down, wrong password, ...
-        return jsonify(ok=False, error='ONOS unreachable at %s: %s' % (onos.ONOS_URL, e))
+        return jsonify(ok=True, label=ctl['label'], **controllers.snapshot(kind))
+    except Exception as e:      # controller down, wrong password, ...
+        return jsonify(ok=False, label=ctl['label'], error='%s unreachable at %s: %s'
+                       % (ctl['label'], ctl['url'], e))
 
 
 @atexit.register

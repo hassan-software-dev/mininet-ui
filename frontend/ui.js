@@ -191,27 +191,28 @@ function addInfo(body, cls, lines) {
   return div;
 }
 
-// Extra details from ONOS for the selected switch or host.
+// Extra details from the controller for the selected switch or host.
 function liveInfo(node) {
-  const o = state.onos;
+  const o = state.live;
   if (!o || !o.ok) return null;
   if (node.type === 'switch') {
-    const id = onosDeviceId(node);
-    const dev = o.devices.find(d => d.id === id);
-    if (!dev) return ['ONOS: not connected', id];
-    return ['ONOS: ' + (dev.available ? 'available' : 'unavailable'), id,
-            'Flow rules: ' + (o.flows[id] || 0)];
+    const dpid = dpidOf(node);
+    const dev = o.devices.find(d => d.dpid === dpid);
+    if (!dev) return [o.label + ': not connected', 'dpid ' + dpid];
+    return [o.label + ': ' + (dev.available ? 'available' : 'unavailable'), dev.id,
+            'Flow rules: ' + (o.flows[dpid] || 0)];
   }
   if (node.type === 'host') {
-    const h = o.hosts.find(x => x.mac === String(node.mac || '').toLowerCase());
-    if (!h) return ['ONOS: host not discovered yet', '(send some traffic, e.g. ping)'];
-    return ['ONOS: discovered', 'IPs: ' + h.ips.join(', ')]
-      .concat(h.locations.map(l => 'at ' + l.device + ' port ' + l.port));
+    const h = liveHost(node);
+    if (!h) return [o.label + ': host not discovered yet', '(send some traffic, e.g. ping)'];
+    const sw = dpid => (nodesOfType('switch').find(s => dpidOf(s) === dpid) || {}).name || dpid;
+    return [o.label + ': discovered', 'IPs: ' + h.ips.join(', ')]
+      .concat(h.locations.map(l => 'at ' + sw(l.dpid) + ' port ' + l.port));
   }
   return null;
 }
 
-// Fill the ONOS info box of the properties panel (if there is one).
+// Fill the live info box of the properties panel (if there is one).
 function renderLive() {
   const box = $('props-live');
   if (!box) return;
@@ -357,31 +358,32 @@ async function pollStatus() {
   updateControls();
 }
 
-async function pollOnos() {
-  if (!$('onos-live').checked) return;
+async function pollLive() {
+  const source = $('live-source').value;      // '', 'onos' or 'odl'
+  if (!source) return;
+  let data = null, status;
   try {
-    const data = await api('/api/onos');
-    state.onos = data;
-    $('onos-status').textContent = data.ok
-      ? `${data.devices.length} devices, ${data.links.length} links, ${data.hosts.length} hosts`
+    data = await api('/api/live?controller=' + source);
+    status = data.ok
+      ? `${data.label}: ${data.devices.length} switches, ${data.links.length} links, ` +
+        `${data.hosts.length} hosts`
       : data.error;
   } catch (e) {
-    state.onos = null;
-    $('onos-status').textContent = 'backend unreachable';
+    status = 'backend unreachable';
   }
+  if ($('live-source').value !== source) return;   // user switched meanwhile
+  state.live = data;
+  $('live-status').textContent = status;
   render();
   renderProps();
 }
 
-$('onos-live').addEventListener('change', () => {
-  if ($('onos-live').checked) {
-    pollOnos();
-  } else {
-    state.onos = null;
-    $('onos-status').textContent = '';
-    render();
-    renderProps();
-  }
+$('live-source').addEventListener('change', () => {
+  state.live = null;
+  $('live-status').textContent = $('live-source').value ? 'connecting...' : '';
+  render();
+  renderProps();
+  pollLive();
 });
 
 // ---- start up ----------------------------------------------------------------
@@ -390,5 +392,5 @@ restore();
 onTopologyChanged();
 pollStatus();
 setInterval(pollStatus, POLL_MS);
-setInterval(pollOnos, POLL_MS);
+setInterval(pollLive, POLL_MS);
 notify('Ready. Place nodes with the toolbar, then press Run.');

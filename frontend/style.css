@@ -71,6 +71,8 @@ button.stop { color: var(--down); font-weight: 600; }
 
 .muted { color: var(--muted); font-size: 12px; }
 
+#toolbar select { font: inherit; padding: 4px 6px; }
+
 /* ---- canvas + properties ---- */
 
 main {
