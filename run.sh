@@ -23,16 +23,19 @@ case "${1:-}" in
     --server|--no-browser) MODE=server ;;
 esac
 
-# Started from the app menu there is no terminal: log to a file instead,
+# The server's messages always go to this file (see step 3).
+LOG="$HOME/.cache/mininet-ui.log"
+mkdir -p "$HOME/.cache"
+
+# Started from the app menu there is no terminal: log everything to the file,
 # and ask for the password with a dialog (pkexec) instead of sudo.
 if [[ -t 0 ]]; then
     IN_TERMINAL=1
 else
     IN_TERMINAL=0
-    mkdir -p "$HOME/.cache"
-    exec >>"$HOME/.cache/mininet-ui.log" 2>&1
-    echo "---- $(date)"
+    exec >>"$LOG" 2>&1
 fi
+echo "---- $(date)" >>"$LOG"
 
 info() { echo -e "\e[1;34m==>\e[0m $*"; }
 warn() { echo -e "\e[1;33mWARNING:\e[0m $*"; }
@@ -149,14 +152,29 @@ if [[ $IN_TERMINAL -eq 1 ]]; then
 else
     ROOT=(pkexec)                           # graphical password dialog
 fi
-info "Starting the server"
-"${ROOT[@]}" /usr/bin/env "${envs[@]}" /bin/bash "$DIR/backend/start-server.sh" &
+info "Starting the server (its messages go to $LOG)"
+# The server must not touch the terminal: sudo would otherwise relay it to
+# the background server, which swallows your typing and can leave the
+# terminal unusable after the app closes. So: no input, output to the log.
+"${ROOT[@]}" /usr/bin/env "${envs[@]}" /bin/bash "$DIR/backend/start-server.sh" \
+    </dev/null >>"$LOG" 2>&1 &
 SERVER_PID=$!
-trap shutdown_server EXIT                   # whatever happens, don't leave it running
+
+# Whatever happens: stop the server, wait for it to finish, and give the
+# terminal back in a normal state.
+finish() {
+    shutdown_server
+    for _ in $(seq 1 15); do
+        [[ -d /proc/$SERVER_PID ]] || break
+        sleep 1
+    done
+    if [[ $IN_TERMINAL -eq 1 ]]; then stty sane 2>/dev/null || true; fi
+}
+trap finish EXIT
 
 for _ in $(seq 1 60); do
     server_up && break
-    [[ -d /proc/$SERVER_PID ]] || fail "The server did not start (password dialog cancelled?). Details: $HOME/.cache/mininet-ui.log"
+    [[ -d /proc/$SERVER_PID ]] || fail "The server did not start (password dialog cancelled?). Details: $LOG"
     sleep 1
 done
 server_up || fail "The server did not answer on $URL within 60 seconds."
@@ -166,7 +184,8 @@ server_up || fail "The server did not answer on $URL within 60 seconds."
 case $MODE in
     window)
         info "Opening the Mininet UI window"
-        python3 desktop/window.py "$URL" ;;
+        python3 desktop/window.py "$URL" </dev/null
+        info "Window closed, stopping the server" ;;
     browser)
         info "Mininet UI is running at $URL (Ctrl+C to stop)"
         open_browser

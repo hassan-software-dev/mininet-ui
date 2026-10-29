@@ -83,7 +83,8 @@ whether to stop it first. Everything is cleaned up when the window closes.
 >
 > - Prefer a browser tab? Start it with `./run.sh --browser`.
 > - `./run.sh --server` only starts the server; open <http://localhost:8080> yourself.
-> - When started from the menu, messages go to `~/.cache/mininet-ui.log`.
+> - The server's messages (and, when started from the menu, all messages)
+>   go to `~/.cache/mininet-ui.log`. Look there if something goes wrong.
 
 ## 3. A tour of the screen
 
@@ -385,6 +386,11 @@ from menu starts are in `~/.cache/mininet-ui.log`.
 **The app window doesn't open, or stays white.**
 Use the browser instead: `./run.sh --browser`. If the browser didn't open
 either, open Firefox yourself and go to `http://localhost:8080`.
+
+**The terminal doesn't react to typing after closing the app.**
+This was a bug in older versions of `run.sh` and is fixed. To repair a
+terminal it happened to, type `reset` and press `Enter` (you won't see the
+letters as you type), or just close that terminal and open a new one.
 
 **"Run" is greyed out.**
 The tool was started without administrator rights. Close it and start it

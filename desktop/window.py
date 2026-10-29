@@ -72,6 +72,7 @@ class Window(Gtk.Window):
             settings.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
         self.view.load_uri(URL)
         self.add(self.view)
+        self.view.connect('run-file-chooser', self.open_file)
         self.connect('delete-event', self.on_close)
 
     def run_js(self, code):
@@ -85,6 +86,34 @@ class Window(Gtk.Window):
         msg = json.loads(value.to_string())
         if msg.get('action') == 'save':
             self.save_file(msg['name'], msg['files'])
+
+    def open_file(self, view, request):
+        """The page's Open button (<input type="file">). WebKit's own dialog
+        filters by file type, and Linux doesn't know a type for .mn files,
+        so they didn't show; this dialog filters by name instead."""
+        dialog = Gtk.FileChooserDialog(title='Open topology', transient_for=self,
+                                       action=Gtk.FileChooserAction.OPEN)
+        dialog.add_buttons('_Cancel', Gtk.ResponseType.CANCEL,
+                           '_Open', Gtk.ResponseType.ACCEPT)
+        dialog.set_current_folder(self.folder)
+        for title, patterns in [('Topologies (*.mn, *.json)', ['*.mn', '*.json']),
+                                (FILE_TYPES['.mn'], ['*.mn']),
+                                (FILE_TYPES['.json'], ['*.json']),
+                                ('All files', ['*'])]:
+            f = Gtk.FileFilter()
+            f.set_name(title)
+            for pattern in patterns:
+                f.add_pattern(pattern)
+                f.add_pattern(pattern.upper())      # also NET.MN etc.
+            dialog.add_filter(f)
+        if dialog.run() == Gtk.ResponseType.ACCEPT:
+            path = dialog.get_filename()
+            self.folder = os.path.dirname(path)
+            request.select_files([path])
+        else:
+            request.cancel()
+        dialog.destroy()
+        return True             # we handled it; don't show WebKit's dialog
 
     def save_file(self, name, files):
         """Ask where to save; `files` maps extension -> content, and the
