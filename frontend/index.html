@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mininet UI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="toolbar">
+    <span class="brand">Mininet UI</span>
+
+    <div class="group" id="tools">
+      <button data-tool="select" class="active" title="Select / move (Esc)">Select</button>
+      <button data-tool="host" title="Click the canvas to place a host">Host</button>
+      <button data-tool="switch" title="Click the canvas to place a switch">Switch</button>
+      <button data-tool="controller" title="Click the canvas to place a controller">Controller</button>
+      <button data-tool="link" title="Click two nodes to connect them">Link</button>
+      <button data-tool="delete" title="Click a node or link to delete it (Del)">Delete</button>
+    </div>
+
+    <div class="group">
+      <button id="btn-new">New</button>
+      <button id="btn-open">Open</button>
+      <button id="btn-save">Save</button>
+      <button id="btn-export" title="Download a standalone Mininet Python script">Export .py</button>
+      <input type="file" id="file-input" accept=".json,application/json" hidden>
+    </div>
+
+    <div class="group">
+      <button id="btn-run" class="run">Run</button>
+      <button id="btn-stop" class="stop" disabled>Stop</button>
+      <span id="net-status" class="badge">stopped</span>
+    </div>
+
+    <div class="group">
+      <label title="Poll ONOS every 3 s and colour the canvas">
+        <input type="checkbox" id="onos-live"> ONOS live view
+      </label>
+      <span id="onos-status" class="muted"></span>
+    </div>
+  </header>
+
+  <main>
+    <svg id="canvas">
+      <g id="layer-control"></g>
+      <g id="layer-links"></g>
+      <line id="rubber-band" visibility="hidden"></line>
+      <g id="layer-nodes"></g>
+    </svg>
+
+    <aside id="props">
+      <h2>Properties</h2>
+      <div id="props-body"></div>
+    </aside>
+  </main>
+
+  <section id="console">
+    <div class="console-bar">
+      <label>Host <select id="cmd-node"></select></label>
+      <input id="cmd-input" placeholder="command, e.g. ifconfig  (Enter to run)" autocomplete="off">
+      <button id="btn-cmd">Run cmd</button>
+      <span class="sep"></span>
+      <label>to <select id="cmd-target"></select></label>
+      <button id="btn-ping">Ping</button>
+      <button id="btn-iperf">iperf</button>
+      <button id="btn-pingall">Ping all</button>
+      <span class="sep"></span>
+      <button id="btn-clear">Clear</button>
+    </div>
+    <pre id="console-out"></pre>
+  </section>
+
+  <script src="state.js"></script>
+  <script src="canvas.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
