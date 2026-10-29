@@ -160,6 +160,9 @@ class Window(Gtk.Window):
             dialog.destroy()
             if answer != Gtk.ResponseType.YES:
                 return True                 # keep the window open
+        self.hide()                         # disappear now; the server stops in the background
+        while Gtk.events_pending():
+            Gtk.main_iteration()
         if not KEEP_SERVER:
             try:
                 api('/api/shutdown', {'confirm': True})

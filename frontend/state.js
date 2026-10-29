@@ -7,7 +7,7 @@ const STORAGE_KEY = 'mininet-ui.topology';
 const TOPOLOGY_VERSION = 2;
 
 const state = {
-  topo: { version: TOPOLOGY_VERSION, nodes: [], links: [], notes: [] },
+  topo: { version: TOPOLOGY_VERSION, nodes: [], links: [], notes: [], settings: {} },
   tool: 'select',        // select | host | switch | controller | link | note | delete
   selected: null,        // { kind: 'node' | 'link' | 'note', id }
   linkStart: null,       // node id while drawing a link
@@ -58,7 +58,7 @@ function addNode(type, x, y) {
     const ips = new Set(nodesOfType('host').map(h => (h.ip || '').split('/')[0]));
     const macs = new Set(nodesOfType('host').map(h => (h.mac || '').toLowerCase()));
     const n = freeNumber('h', i => ips.has(ipFor(i)) || macs.has(macFor(i)));
-    Object.assign(node, { name: 'h' + n, ip: ipFor(n) + '/8', mac: macFor(n) });
+    Object.assign(node, { name: 'h' + n, ip: ipFor(n) + '/' + prefixOf(), mac: macFor(n) });
   } else if (type === 'switch') {
     const dpids = new Set(nodesOfType('switch').map(s => parseInt(s.dpid, 16)));
     const n = freeNumber('s', i => dpids.has(i));
@@ -71,9 +71,23 @@ function addNode(type, x, y) {
   return node;
 }
 
-// 10.0.0.1 ... 10.0.0.254, 10.0.1.1 ... (inside Mininet's 10.0.0.0/8)
-function ipFor(n) {
-  return '10.0.' + Math.floor((n - 1) / 254) + '.' + ((n - 1) % 254 + 1);
+// The network's IP base from Network settings, e.g. "10.0.0.0/8" (Mininet's default).
+function ipBase() {
+  return (state.topo.settings || {}).ipBase || '10.0.0.0/8';
+}
+
+// Address number n inside an IP base: ipFor(1, '10.0.0.0/8') -> '10.0.0.1'.
+function ipFor(n, base = ipBase()) {
+  const parts = base.split('/')[0].split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => !(p >= 0 && p <= 255))) parts.splice(0, 4, 10, 0, 0, 0);
+  const v = parts[0] * 2 ** 24 + parts[1] * 2 ** 16 + parts[2] * 2 ** 8 + parts[3] + n;
+  return [Math.floor(v / 2 ** 24) % 256, Math.floor(v / 2 ** 16) % 256,
+          Math.floor(v / 2 ** 8) % 256, v % 256].join('.');
+}
+
+// "/8" part of an IP base.
+function prefixOf(base = ipBase()) {
+  return base.split('/')[1] || '8';
 }
 
 // Returns the new link, or an error message string.
@@ -118,7 +132,8 @@ function setTopology(topo) {
     throw new Error('Not a topology file (needs "nodes" and "links" arrays)');
   }
   state.topo = { version: TOPOLOGY_VERSION, nodes: topo.nodes, links: topo.links,
-                 notes: Array.isArray(topo.notes) ? topo.notes : [] };
+                 notes: Array.isArray(topo.notes) ? topo.notes : [],
+                 settings: topo.settings && typeof topo.settings === 'object' ? topo.settings : {} };
   // Before version 2 every switch was linked to every controller
   // automatically; add those control links so old files work the same.
   if (!topo.version) {

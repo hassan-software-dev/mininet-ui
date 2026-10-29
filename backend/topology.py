@@ -36,6 +36,9 @@ DELAY_RE = re.compile(r'^\d+(\.\d+)?(us|ms|s)$')
 # "dev <interface>" or just an interface name such as "h1-eth0".
 ROUTE_RE = re.compile(r'^(via \d{1,3}(\.\d{1,3}){3}( dev [\w-]+)?|dev [\w-]+|[\w-]+)$')
 CORES_RE = re.compile(r'^\d+([,-]\d+)*$')      # CPU cores, e.g. "0", "0,2", "0-1"
+COLLECTOR_RE = re.compile(r'^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$')   # sFlow/NetFlow "ip:port"
+INTF_RE = re.compile(r'^[\w.-]{1,15}$')                          # e.g. "lo", "enp0s3"
+TRUE = (True, 'true', '1', 1)                   # checkbox values that mean "on"
 
 # Choices for the select boxes (first one is Mininet's default).
 OF_VERSIONS = ('OpenFlow13', 'OpenFlow10', 'OpenFlow11', 'OpenFlow12',
@@ -91,6 +94,90 @@ def _choice(value, choices, field, label, errors):
     return value
 
 
+def _int(value, default, field, errors, lo, hi):
+    """An optional whole number with a default (network settings)."""
+    num = _number(value, field, 'Network', errors, lo, hi)
+    return default if num is None else int(num)
+
+
+def _settings(topo, errors):
+    """Validate the network-wide settings (like MiniEdit's Preferences).
+
+    Returns (Mininet() keyword arguments, default OpenFlow versions for
+    switches, sFlow settings or None, NetFlow settings or None).
+    """
+    s = topo.get('settings') or {}
+    net = {}
+    base = str(s.get('ipBase') or '').strip()
+    if base:
+        try:
+            network = ipaddress.ip_network(base, strict=False)
+            if network.version != 4:
+                raise ValueError
+            net['ipBase'] = str(network)
+        except ValueError:
+            errors.append('Network: IP base must look like 10.0.0.0/8')
+    if s.get('autoStaticArp') in TRUE:
+        net['autoStaticArp'] = True
+    port = _number(s.get('listenPort'), 'listen port', 'Network', errors, 1, 65535)
+    if port is not None:
+        net['listenPort'] = int(port)
+
+    versions = s.get('openFlowVersions') or ['OpenFlow13']
+    if isinstance(versions, str):
+        versions = versions.split(',')
+    if any(v not in OF_VERSIONS for v in versions):
+        errors.append('Network: unknown OpenFlow version in %s' % ', '.join(versions))
+    protocols = ','.join(sorted(v for v in versions if v in OF_VERSIONS)) or 'OpenFlow13'
+
+    sflow = netflow = None
+    target = str(s.get('sflowTarget') or '').strip()
+    if target:
+        if not COLLECTOR_RE.match(target):
+            errors.append('Network: sFlow collector must look like 127.0.0.1:6343')
+        agent = str(s.get('sflowAgent') or '').strip() or 'lo'
+        if not INTF_RE.match(agent):
+            errors.append('Network: sFlow agent must be an interface name such as lo')
+        sflow = {'target': target, 'agent': agent,
+                 'sampling': _int(s.get('sflowSampling'), 400, 'sFlow sampling', errors, 1, 1000000),
+                 'header': _int(s.get('sflowHeader'), 128, 'sFlow header', errors, 64, 256),
+                 'polling': _int(s.get('sflowPolling'), 30, 'sFlow polling', errors, 0, 3600)}
+    target = str(s.get('netflowTarget') or '').strip()
+    if target:
+        if not COLLECTOR_RE.match(target):
+            errors.append('Network: NetFlow collector must look like 127.0.0.1:2055')
+        netflow = {'target': target,
+                   'timeout': _int(s.get('netflowTimeout'), 600, 'NetFlow timeout', errors, 0, 86400),
+                   'addId': s.get('netflowAddId') in TRUE}
+    return net, protocols, sflow, netflow
+
+
+def monitoring_commands(spec):
+    """ovs-vsctl commands (argument lists) that turn on sFlow / NetFlow on
+    every switch, as MiniEdit does. Used by both Run and Export."""
+    names = [s['name'] for s in spec['switches']]
+    commands = []
+    if spec['sflow'] and names:
+        f = spec['sflow']
+        cmd = ['ovs-vsctl', '--', '--id=@sflow', 'create', 'sFlow',
+               'agent=%s' % f['agent'], 'targets="%s"' % f['target'],
+               'sampling=%d' % f['sampling'], 'header=%d' % f['header'],
+               'polling=%d' % f['polling']]
+        for name in names:
+            cmd += ['--', 'set', 'Bridge', name, 'sflow=@sflow']
+        commands.append(cmd)
+    if spec['netflow'] and names:
+        f = spec['netflow']
+        cmd = ['ovs-vsctl', '--', '--id=@netflow', 'create', 'NetFlow',
+               'targets="%s"' % f['target'], 'active_timeout=%d' % f['timeout']]
+        if f['addId']:
+            cmd.append('add_id_to_interface=true')
+        for name in names:
+            cmd += ['--', 'set', 'Bridge', name, 'netflow=@netflow']
+        commands.append(cmd)
+    return commands
+
+
 # ---- keyword arguments for the Mininet API, shared by Run and Export ----
 
 def host_params(host):
@@ -119,6 +206,7 @@ def normalize(topo):
     links = topo.get('links') or []
 
     spec = {'controllers': [], 'switches': [], 'hosts': [], 'links': []}
+    spec['net'], default_protocols, spec['sflow'], spec['netflow'] = _settings(topo, errors)
     by_id = {}              # node id -> node dict from the input
     names, ips, macs, dpids = set(), set(), set(), set()
 
@@ -205,15 +293,16 @@ def normalize(topo):
                 dpids.add(dpid)
             # Keyword arguments for net.addSwitch(); only non-defaults besides
             # protocols, which is always given (Open vSwitch's default is 1.0).
-            opts = {'protocols': _choice(node.get('protocols'), OF_VERSIONS,
-                                         'OpenFlow version', name, errors)}
+            # Blank = the network's default OpenFlow version(s).
+            opts = {'protocols': default_protocols if _blank(node.get('protocols')) else
+                    _choice(node.get('protocols'), OF_VERSIONS, 'OpenFlow version', name, errors)}
             fail_mode = _choice(node.get('failMode'), FAIL_MODES, 'fail mode', name, errors)
             if fail_mode != 'secure':
                 opts['failMode'] = fail_mode
             datapath = _choice(node.get('datapath'), DATAPATHS, 'datapath', name, errors)
             if datapath != 'kernel':
                 opts['datapath'] = datapath
-            if node.get('stp') in (True, 'true', '1', 1):
+            if node.get('stp') in TRUE:
                 opts['stp'] = True
             listen = _number(node.get('listenPort'), 'listen port', name, errors, 1, 65535)
             if listen is not None:
@@ -330,6 +419,9 @@ def generate_script(topo):
         for i, line in enumerate(str(note.get('text', '')).strip().splitlines()):
             out.append(('# Note: ' if i == 0 else '#       ') + line)
     limited = any(host_limited(h) for h in spec['hosts'])
+    monitoring = monitoring_commands(spec)
+    net_args = ''.join(', %s=%r' % kv for kv in spec['net'].items())
+    out += ['import subprocess'] if monitoring else []
     out += [
         'from mininet.net import Mininet',
         'from mininet.node import RemoteController, OVSSwitch%s'
@@ -341,9 +433,9 @@ def generate_script(topo):
         '',
         'def start_network():',
         '    net = Mininet(controller=None, switch=OVSSwitch, link=TCLink,',
-        '                  autoSetMacs=False, build=False)',
+        '                  autoSetMacs=False, build=False%s)' % net_args,
         '',
-        "    info('*** Adding controllers\n')",
+        "    info('*** Adding controllers\\n')",
     ]
     for c in spec['controllers']:
         args = [('ip', c['ip']), ('port', c['port'])]
@@ -351,11 +443,11 @@ def generate_script(topo):
             args.append(('protocol', c['protocol']))
         out.append('    %s = net.addController(%r, controller=RemoteController, %s)'
                    % (c['name'], c['name'], _kwargs(args)))
-    out += ['', "    info('*** Adding switches\n')"]
+    out += ['', "    info('*** Adding switches\\n')"]
     for s in spec['switches']:
         out.append('    %s = net.addSwitch(%r, %s)' % (
             s['name'], s['name'], _kwargs([('dpid', s['dpid'])] + list(s['opts'].items()))))
-    out += ['', "    info('*** Adding hosts\n')"]
+    out += ['', "    info('*** Adding hosts\\n')"]
     for h in spec['hosts']:
         args = [_kwargs(host_params(h).items())]
         if host_limited(h):
@@ -363,19 +455,22 @@ def generate_script(topo):
         args = ', '.join(a for a in args if a)
         out.append('    %s = net.addHost(%r%s)' % (h['name'], h['name'],
                                                  ', ' + args if args else ''))
-    out += ['', "    info('*** Adding links\n')"]
+    out += ['', "    info('*** Adding links\\n')"]
     for l in spec['links']:
         args = ', ' + _kwargs(sorted(l['opts'].items())) if l['opts'] else ''
         out.append('    net.addLink(%s, %s%s)' % (l['src'], l['dst'], args))
     # Not net.start(): that would connect every switch to every controller.
-    out += ['', '    net.build()', "    info('*** Starting controllers\n')"]
+    out += ['', '    net.build()', "    info('*** Starting controllers\\n')"]
     out += ['    %s.start()' % c['name'] for c in spec['controllers']]
-    out += ["    info('*** Starting switches (each with the controllers it is linked to)\n')"]
+    out += ["    info('*** Starting switches (each with the controllers it is linked to)\\n')"]
     out += ['    %s.start([%s])' % (s['name'], ', '.join(s['controllers']))
             for s in spec['switches']]
+    if monitoring:
+        out.append("    info('*** Turning on sFlow / NetFlow\\n')")
+        out += ['    subprocess.run(%r)' % cmd for cmd in monitoring]
     starts = [h for h in spec['hosts'] if 'startCommand' in h]
     if starts:
-        out.append("    info('*** Running start commands\n')")
+        out.append("    info('*** Running start commands\\n')")
         out += ['    %s.cmd(%r)' % (h['name'], h['startCommand']) for h in starts]
     out += [
         '    return net',

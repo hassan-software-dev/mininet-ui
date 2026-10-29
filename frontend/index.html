@@ -97,6 +97,15 @@
         <path d="M11.5 9 V17.5 M8 14 L11.5 17.5 L15 14" fill="none" stroke="#2e7d32"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24">
+        <!-- gear: 8 teeth around a ring -->
+        <path d="M10.3 2.5 H13.7 L14.2 5.2 L16.4 6.1 L18.7 4.6 L21.1 7 L19.6 9.3 L20.5 11.5 L23 12
+                 V13.4 L20.5 13.9 L19.6 16.1 L21.1 18.4 L18.7 20.8 L16.4 19.3 L14.2 20.2 L13.7 22.5
+                 H10.3 L9.8 20.2 L7.6 19.3 L5.3 20.8 L2.9 18.4 L4.4 16.1 L3.5 13.9 L1 13.4 V12
+                 L3.5 11.5 L4.4 9.3 L2.9 7 L5.3 4.6 L7.6 6.1 L9.8 5.2 Z"
+              fill="#8a96a3" stroke="#4a5561" stroke-width="1" stroke-linejoin="round"/>
+        <circle cx="12" cy="12.7" r="3.6" fill="#ececec" stroke="#4a5561" stroke-width="1"/>
+      </symbol>
       <symbol id="i-run" viewBox="0 0 24 24">
         <path d="M7 4.5 L19.5 12 L7 19.5 Z" fill="#2e9e44" stroke="#1b6b2c" stroke-linejoin="round"/>
       </symbol>
@@ -120,6 +129,8 @@
       <svg class="icon"><use href="#i-save"/></svg></button>
     <button id="btn-export" class="icon-btn" title="Export a standalone Mininet Python script">
       <svg class="icon"><use href="#i-export"/></svg></button>
+    <button id="btn-settings" class="icon-btn" title="Network settings: OpenFlow versions, IP base, sFlow, NetFlow...">
+      <svg class="icon"><use href="#i-settings"/></svg></button>
     <input type="file" id="file-input" accept=".mn,.json,application/json" hidden>
 
     <span class="tb-sep"></span>

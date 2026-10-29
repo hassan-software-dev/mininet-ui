@@ -42,11 +42,35 @@ function pick(opts, keys) {
   return result;
 }
 
-// MiniEdit's global "OpenFlow versions" ticks: those used by any switch.
-function openFlowVersions(switches) {
-  const used = new Set(switches.map(s => s.protocols || 'OpenFlow13'));
+// Network OpenFlow versions -> MiniEdit's "OpenFlow versions" ticks (1.0-1.3 only).
+function openFlowVersions(versions) {
+  const used = new Set(versions && versions.length ? versions : ['OpenFlow13']);
   const tick = v => (used.has('OpenFlow' + v) ? '1' : '0');
   return { ovsOf10: tick('10'), ovsOf11: tick('11'), ovsOf12: tick('12'), ovsOf13: tick('13') };
+}
+
+// MiniEdit's Preferences -> our network settings (for files made in MiniEdit).
+function settingsFromMiniEdit(data) {
+  const app = data.application || {};
+  const ticks = app.openFlowVersions || {};
+  const versions = ['10', '11', '12', '13'].filter(v => ticks['ovsOf' + v] === '1')
+    .map(v => 'OpenFlow' + v);
+  const sflow = app.sflow || {}, netflow = app.netflow || {};
+  const used = flag => (data.switches || []).some(s => (s.opts || {})[flag] === '1');
+  const settings = {
+    ipBase: app.ipBase && app.ipBase !== '10.0.0.0/8' ? app.ipBase : '',
+    listenPort: app.dpctl || '',
+    openFlowVersions: versions.length ? versions : ['OpenFlow13'],
+  };
+  if (used('sflow') && sflow.sflowTarget) {
+    Object.assign(settings, { sflowTarget: sflow.sflowTarget, sflowHeader: sflow.sflowHeader || '',
+                              sflowSampling: sflow.sflowSampling || '', sflowPolling: sflow.sflowPolling || '' });
+  }
+  if (used('netflow') && netflow.nflowTarget) {
+    Object.assign(settings, { netflowTarget: netflow.nflowTarget, netflowTimeout: netflow.nflowTimeout || '',
+                              netflowAddId: netflow.nflowAddId === '1' });
+  }
+  return settings;
 }
 
 function numberOrString(value) {
@@ -105,17 +129,29 @@ function toMiniEdit(topo) {
     return { src: name(l.src), dest: name(l.dst), opts };
   });
 
+  // Network settings -> MiniEdit's Preferences ("application").
+  const st = topo.settings || {};
+  const str = (v, dflt) => (v === '' || v == null ? dflt : String(v));
+  // MiniEdit turns sFlow/NetFlow on per switch; we use them on all switches.
+  for (const s of switches) {
+    if (st.sflowTarget) s.opts.sflow = '1';
+    if (st.netflowTarget) s.opts.netflow = '1';
+  }
+
   return {
     application: {
-      ipBase: '10.0.0.0/8', terminalType: 'xterm', startCLI: '0',
-      switchType: 'ovs', dpctl: '',
-      openFlowVersions: openFlowVersions(byType('switch')),
-      sflow: { sflowTarget: '', sflowHeader: '128', sflowSampling: '400', sflowPolling: '30' },
-      netflow: { nflowTarget: '', nflowTimeout: '600', nflowAddId: '0' },
+      ipBase: str(st.ipBase, '10.0.0.0/8'), terminalType: 'xterm', startCLI: '0',
+      switchType: 'ovs', dpctl: str(st.listenPort, ''),
+      openFlowVersions: openFlowVersions(st.openFlowVersions),
+      sflow: { sflowTarget: str(st.sflowTarget, ''), sflowHeader: str(st.sflowHeader, '128'),
+               sflowSampling: str(st.sflowSampling, '400'), sflowPolling: str(st.sflowPolling, '30') },
+      netflow: { nflowTarget: str(st.netflowTarget, ''), nflowTimeout: str(st.netflowTimeout, '600'),
+                 nflowAddId: st.netflowAddId ? '1' : '0' },
     },
     controllers, hosts, switches, links,
     // Not part of MiniEdit's format; MiniEdit ignores keys it doesn't know.
     notes: (topo.notes || []).map(n => ({ x: String(n.x), y: String(n.y), text: n.text })),
+    settings: st,      // all network settings, including ones MiniEdit doesn't have
     version: MINIEDIT_VERSION,
   };
 }
@@ -123,10 +159,10 @@ function toMiniEdit(topo) {
 // MiniEdit .mn object -> our topology. `notes` collects conversion messages.
 function fromMiniEdit(data, notes) {
   const nodes = [], links = [], idByName = {};
-  // MiniEdit sets the OpenFlow version for all switches; use the newest ticked one.
-  const versions = (data.application || {}).openFlowVersions || {};
-  const defaultVersion = ['13', '12', '11', '10'].map(v => 'OpenFlow' + v)
-    .find(v => versions['ovsOf' + v.slice(-2)] === '1') || 'OpenFlow13';
+  // Our own files keep the full settings; MiniEdit's only have its Preferences.
+  const settings = data.settings && typeof data.settings === 'object'
+    ? data.settings : settingsFromMiniEdit(data);
+  const base = settings.ipBase || '10.0.0.0/8';
   const place = (type, item, fields) => {
     const node = Object.assign({ id: newId('n'), type,
                                  x: Math.round(Number(item.x) || 100),
@@ -154,7 +190,7 @@ function fromMiniEdit(data, notes) {
       notes.push(`${name}: MiniEdit "${o.switchType}" loaded as an OpenFlow switch`);
     }
     place('switch', s, Object.assign({ name, dpid: o.dpid || hex(num, 16),
-                                       protocols: o.protocols || defaultVersion,
+                                       protocols: o.protocols || '',     // '' = network default
                                        listenPort: o.dpctl || '' },
                                      pick(o, ['failMode', 'datapath', 'stp'])));
     // The switch's controllers become control links.
@@ -171,7 +207,7 @@ function fromMiniEdit(data, notes) {
     const num = parseInt(h.number || o.nodeNum, 10) || 1;
     // MiniEdit fills in IPs from ipBase when they are left blank.
     place('host', h, Object.assign({ name: o.hostname || 'h' + num,
-                                     ip: o.ip || ipFor(num) + '/8', mac: o.mac || macFor(num),
+                                     ip: o.ip || ipFor(num, base) + '/' + prefixOf(base), mac: o.mac || macFor(num),
                                      cpu: o.cpu ? String(o.cpu) : '',
                                      sched: ['cfs', 'rt'].includes(o.sched) ? o.sched : '' },
                                    pick(o, ['defaultRoute', 'cores', 'startCommand', 'stopCommand'])));
@@ -193,7 +229,7 @@ function fromMiniEdit(data, notes) {
     text: String(n.text || ''),
   }));
   // Control links come from the file, so no automatic ones (see setTopology).
-  return { version: TOPOLOGY_VERSION, nodes, links, notes: textNotes };
+  return { version: TOPOLOGY_VERSION, nodes, links, notes: textNotes, settings };
 }
 
 // Parse the text of an opened file (.mn or .json) into our topology.

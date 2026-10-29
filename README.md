@@ -77,7 +77,9 @@ You can right-click it in the dock and choose **Add to Favourites**.
 ### Quitting
 
 Just close the window. If the network is still running, Mininet UI asks
-whether to stop it first. Everything is cleaned up when the window closes.
+whether to stop it first. The window disappears right away; stopping the
+network and the server then takes a few more seconds in the background, and
+the terminal shows *Stopped (N s)* when it's done.
 
 > **Tips**
 >
@@ -124,8 +126,8 @@ The numbers match the picture at the top of this page.
 ![Toolbar](docs/screenshots/08-toolbar.png)
 
 From left to right: **New** (empty workspace), **Open**, **Save**,
-**Export** (download a Python script), **Run**, **Stop**, the network
-status (*stopped* / *running*), and **Live view**.
+**Export** (download a Python script), **Network settings** (the gear),
+**Run**, **Stop**, the network status (*stopped* / *running*), and **Live view**.
 
 ## 4. Build your first network
 
@@ -254,6 +256,31 @@ the PC's start/stop commands).
 
 <br clear="right">
 
+### Network settings (OpenFlow versions, sFlow, ...)
+
+Settings for the whole network, like MiniEdit's *Preferences*. Click the
+**gear** on the toolbar, or click an empty spot of the workspace: the
+Properties panel then shows **Network settings**.
+
+<img src="docs/screenshots/13-network-settings.png" alt="Network settings" width="270" align="right">
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **OpenFlow versions** | 1.3 | Which OpenFlow versions the switches speak. Tick several to allow more than one (e.g. 1.0 and 1.3). A switch can use its own version under its *More options*; by default it uses this one. |
+| dpctl listen port | (none) | Gives every switch a port for `ovs-ofctl`/`dpctl`: the first switch gets this port, the next one +1, and so on. |
+| IP base | `10.0.0.0/8` | The network the PCs live in. New PCs get their addresses from it (e.g. `192.168.1.0/24` gives `192.168.1.1`, `.2`, ...). |
+| Static ARP | off | PCs know each other's MAC addresses from the start, so the first ping doesn't wait for ARP. |
+| **sFlow collector** | off | Address (`ip:port`) of an sFlow collector such as **sFlow-RT** (`127.0.0.1:6343`). Every switch then sends traffic samples there, which is useful for detecting attacks like DDoS. |
+| sFlow sampling / header / polling / agent | 400 / 128 / 30 / `lo` | Sample 1 in N packets; bytes of each packet to send; seconds between counter reports; the interface the samples come from. |
+| NetFlow collector | off | Address (`ip:port`) of a NetFlow collector. Every switch then reports traffic flows there. |
+| NetFlow timeout / add ID | 600 / off | Seconds before long flows are reported; whether to add the switch ID to interface numbers. |
+
+These are saved in your file (in `.mn` files as MiniEdit's Preferences),
+used by **Run**, and written into the exported script. sFlow and NetFlow
+are switched on with `ovs-vsctl`, the same way MiniEdit does it.
+
+<br clear="right">
+
 While the network is running, settings are locked (greyed out). Press
 **Stop** to change them. You can still move devices around.
 
@@ -318,6 +345,8 @@ quick buttons: **ifconfig**, **route**, **arp**.
 ![Console output](docs/screenshots/05-console.png)
 
 Press **Stop** when you're done. The whole network is removed cleanly.
+This takes a few seconds, because Mininet removes every link, switch and PC
+one by one; the console shows how long it took.
 
 ## 7. See what the controller sees (live view)
 

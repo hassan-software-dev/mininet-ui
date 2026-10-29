@@ -104,6 +104,13 @@ $('btn-new').addEventListener('click', () => {
 
 $('btn-open').addEventListener('click', () => $('file-input').click());
 
+// Network settings live in the Properties panel when nothing is selected.
+$('btn-settings').addEventListener('click', () => {
+  setTool('select');
+  select(null);
+  $('props').scrollTop = 0;
+});
+
 $('file-input').addEventListener('change', async evt => {
   const file = evt.target.files[0];
   evt.target.value = '';          // allow re-opening the same file
@@ -186,9 +193,11 @@ $('btn-run').addEventListener('click', async () => {
 });
 
 $('btn-stop').addEventListener('click', async () => {
-  if (await mininetAction('stop network', '/api/stop', {})) {
+  notify('Stopping the network (Mininet removes every link, switch and PC)...');
+  const data = await mininetAction('stop network', '/api/stop', {});
+  if (data) {
     state.running = false;
-    notify('Network stopped', 'ok');
+    notify(`Network stopped (${data.seconds} s)`, 'ok');
   }
   updateControls();
 });
@@ -232,7 +241,8 @@ const FIELDS = {
     ['name', 'Name'],
     ['dpid', 'DPID (16 hex digits)'],
     ['protocols', 'OpenFlow version', { more: true, type: 'select',
-      choices: ['OpenFlow13', 'OpenFlow10', 'OpenFlow11', 'OpenFlow12', 'OpenFlow14', 'OpenFlow15'] }],
+      choices: [['', 'Network default (see Network settings)'], 'OpenFlow10', 'OpenFlow11',
+                'OpenFlow12', 'OpenFlow13', 'OpenFlow14', 'OpenFlow15'] }],
     ['failMode', 'Fail mode (when the controller is unreachable)', { more: true, type: 'select',
       choices: [['secure', 'secure: drop traffic'], ['standalone', 'standalone: act as a normal switch']] }],
     ['datapath', 'Datapath', { more: true, type: 'select',
@@ -246,6 +256,30 @@ const FIELDS = {
     ['port', 'OpenFlow port'],
     ['protocol', 'Connection', { more: true, type: 'select',
       choices: [['tcp', 'tcp'], ['ssl', 'ssl (needs certificates)']] }],
+  ],
+  // Whole-network settings (like MiniEdit's Preferences), shown when nothing
+  // is selected. ['-', text] is a section heading.
+  network: [
+    ['-', 'OpenFlow'],
+    ['openFlowVersions', 'OpenFlow versions the switches speak', { type: 'checks',
+      choices: ['OpenFlow10', 'OpenFlow11', 'OpenFlow12', 'OpenFlow13', 'OpenFlow14', 'OpenFlow15'],
+      fallback: ['OpenFlow13'] }],
+    ['listenPort', 'dpctl listen port (first switch; the next ones +1)',
+      { placeholder: 'e.g. 6654, blank = none' }],
+    ['-', 'Addressing'],
+    ['ipBase', 'IP base (network for the PCs)', { placeholder: '10.0.0.0/8' }],
+    ['autoStaticArp', 'Static ARP (PCs know each other’s MAC address from the start)',
+      { type: 'check' }],
+    ['-', 'sFlow (traffic sampling, e.g. for sFlow-RT)'],
+    ['sflowTarget', 'sFlow collector (ip:port, blank = off)', { placeholder: 'e.g. 127.0.0.1:6343' }],
+    ['sflowSampling', 'Sampling rate (1 in N packets)', { placeholder: '400' }],
+    ['sflowHeader', 'Header bytes', { placeholder: '128' }],
+    ['sflowPolling', 'Counter polling interval (seconds)', { placeholder: '30' }],
+    ['sflowAgent', 'Agent interface', { placeholder: 'lo' }],
+    ['-', 'NetFlow'],
+    ['netflowTarget', 'NetFlow collector (ip:port, blank = off)', { placeholder: 'e.g. 127.0.0.1:2055' }],
+    ['netflowTimeout', 'Active timeout (seconds)', { placeholder: '600' }],
+    ['netflowAddId', 'Add switch ID to interface', { type: 'check' }],
   ],
   link: [
     ['bw', 'Bandwidth (Mbit/s, blank = unlimited)'],
@@ -292,6 +326,32 @@ function addField(body, obj, key, label, opts = {}) {
     if (key === 'name') updateHostLists();
   };
   let input;
+  if (opts.type === 'checks') {
+    // Several checkboxes; the value is the list of ticked choices. A <div>,
+    // not a <label>: clicking a label's caption would tick the first box.
+    const group = document.createElement('div');
+    group.className = 'field';
+    group.textContent = label;
+    const box = document.createElement('div');
+    box.className = 'checks';
+    const ticked = new Set(obj[key] || opts.fallback || []);
+    const boxes = opts.choices.map(choice => {
+      const item = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = ticked.has(choice);
+      cb.disabled = state.running;
+      cb.addEventListener('change', () =>
+        changed(boxes.filter(b => b.checked).map(b => b.value)));
+      cb.value = choice;
+      item.append(cb, ' ' + choice.replace('OpenFlow', ''));
+      box.appendChild(item);
+      return cb;
+    });
+    group.appendChild(box);
+    body.appendChild(group);
+    return;
+  }
   if (opts.type === 'check') {
     wrap.className = 'check';
     input = document.createElement('input');
@@ -324,8 +384,12 @@ function addField(body, obj, key, label, opts = {}) {
 // Basic fields, then the rest in a collapsible "More options" section.
 function addFields(body, obj, kind) {
   const fields = FIELDS[kind];
-  fields.filter(f => !(f[2] || {}).more).forEach(([key, label, opts]) =>
-    addField(body, obj, key, label, opts));
+  fields.filter(f => !(f[2] || {}).more).forEach(([key, label, opts]) => {
+    if (key !== '-') return addField(body, obj, key, label, opts);
+    const h = document.createElement('h3');
+    h.textContent = label;
+    body.appendChild(h);
+  });
   const more = fields.filter(f => (f[2] || {}).more);
   if (!more.length) return;
   const details = document.createElement('details');
@@ -409,14 +473,14 @@ function renderProps() {
   const obj = sel && find[sel.kind](sel.id);
   const title = $('props').querySelector('h2');
   if (!obj) {
-    title.textContent = 'Properties';
+    // Nothing selected: settings for the whole network (MiniEdit's Preferences).
+    title.textContent = 'Network settings';
     addInfo(body, 'hint', [
-      'Pick a device on the left, then click the workspace to place it.',
-      'Link tool: click two devices to connect them.',
-      'Drag devices to move them. Del deletes the selection, Esc cancels.',
-      'Link each switch to a controller too (dashed purple line), or it ' +
-        'won’t forward traffic.',
+      'Pick a device on the left, then click the workspace to place it. ' +
+        'Click a device or link to see its own settings.',
     ]);
+    addFields(body, state.topo.settings, 'network');
+    if (state.running) addInfo(body, 'hint', ['Stop the network to change settings.']);
     return;
   }
   if (sel.kind === 'note') {

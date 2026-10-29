@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, os.path.join(ROOT, 'backend'))
 
-from topology import TopologyError, generate_script, normalize  # noqa: E402
+from topology import TopologyError, generate_script, monitoring_commands, normalize  # noqa: E402
 
 
 def topo(nodes, links=()):
@@ -69,6 +69,37 @@ class NormalizeTests(unittest.TestCase):
         self.assertIn("failMode='standalone'", script)
         self.assertIn("protocol='ssl'", script)
         self.assertIn("h1.cmd('python3 -m http.server 80 &')", script)
+
+    def test_network_settings(self):
+        t = topo([H1, S1, C0], [{'id': 'l', 'src': 'a', 'dst': 'c'},
+                                {'id': 'k', 'src': 'c', 'dst': 'd'}])
+        t['settings'] = {'ipBase': '10.1.0.0/16', 'autoStaticArp': True,
+                         'openFlowVersions': ['OpenFlow13', 'OpenFlow10'],
+                         'sflowTarget': '127.0.0.1:6343', 'sflowSampling': '10',
+                         'netflowTarget': '127.0.0.1:2055', 'netflowAddId': True}
+        spec, _ = normalize(t)
+        self.assertEqual(spec['net'], {'ipBase': '10.1.0.0/16', 'autoStaticArp': True})
+        # S1 has no OpenFlow version of its own, so it gets the network's
+        self.assertEqual(spec['switches'][0]['opts']['protocols'], 'OpenFlow10,OpenFlow13')
+        sflow, netflow = monitoring_commands(spec)
+        self.assertIn('targets="127.0.0.1:6343"', sflow)
+        self.assertIn('sampling=10', sflow)
+        self.assertEqual(sflow[-5:], ['--', 'set', 'Bridge', 's1', 'sflow=@sflow'])
+        self.assertIn('add_id_to_interface=true', netflow)
+
+        script = generate_script(t)
+        compile(script, 'topology.py', 'exec')
+        self.assertIn("ipBase='10.1.0.0/16', autoStaticArp=True)", script)
+        self.assertIn('subprocess.run([', script)
+        self.assertIn("info('*** Adding hosts\\n')", script)   # \n kept escaped
+
+    def test_bad_network_settings(self):
+        t = topo([H1, S1])
+        t['settings'] = {'ipBase': 'ten', 'sflowTarget': 'localhost', 'openFlowVersions': ['OpenFlow9']}
+        msg = self.errors(t)
+        self.assertIn('IP base must look like', msg)
+        self.assertIn('sFlow collector must look like', msg)
+        self.assertIn('unknown OpenFlow version', msg)
 
     def test_bad_advanced_options(self):
         h = dict(H1, defaultRoute='via x; rm -rf /', cpu='2', cores='a')

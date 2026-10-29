@@ -8,10 +8,11 @@ Flask serves requests on several threads, so every call that touches the
 network takes self.lock.
 """
 import shlex
+import subprocess
 import threading
 import time
 
-from topology import host_limited, host_params, normalize
+from topology import host_limited, host_params, monitoring_commands, normalize
 
 CMD_TIMEOUT = 30            # seconds before a user command is killed
 
@@ -67,7 +68,7 @@ class NetworkRunner:
                 raise RunnerError('Network is already running')
             cleanup()           # same as `sudo mn -c`: remove leftovers
             net = Mininet(controller=None, switch=OVSSwitch, link=TCLink,
-                          autoSetMacs=False, build=False)
+                          autoSetMacs=False, build=False, **spec['net'])
             try:
                 for c in spec['controllers']:
                     net.addController(c['name'], controller=RemoteController,
@@ -86,6 +87,10 @@ class NetworkRunner:
                     c.start()
                 for s in spec['switches']:
                     net.get(s['name']).start([net.get(c) for c in s['controllers']])
+                for cmd in monitoring_commands(spec):       # sFlow / NetFlow
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode:
+                        warnings.append('sFlow/NetFlow setup failed: ' + result.stderr.strip())
             except Exception:
                 try:
                     net.stop()
@@ -118,16 +123,24 @@ class NetworkRunner:
         return host.cmd('timeout %d sh -c %s' % (CMD_TIMEOUT, shlex.quote(cmd)))
 
     def stop(self):
+        """Stop the network. Returns how many seconds it took; the parts are
+        printed to the server log, to see what is slow."""
         with self.lock:
             if self.net is None:
                 raise RunnerError('Network is not running')
+            began = time.time()
             try:
                 for h in self.spec['hosts']:
                     if 'stopCommand' in h:
                         self._timed_cmd(self.net.get(h['name']), h['stopCommand'])
-                self.net.stop()
+                commands_done = time.time()
+                self.net.stop()     # Mininet removes links, switches, hosts one by one
             finally:
                 self.net, self.spec, self._connected = None, None, {}
+            took = time.time() - began
+            print('Network stopped in %.1f s (stop commands %.1f s, Mininet %.1f s)'
+                  % (took, commands_done - began, time.time() - commands_done), flush=True)
+            return took
 
     # ---- commands --------------------------------------------------------
 

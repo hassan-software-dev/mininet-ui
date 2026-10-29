@@ -92,8 +92,7 @@ def start():
 @app.post('/api/stop')
 def stop():
     need_root()
-    runner.stop()
-    return jsonify(ok=True)
+    return jsonify(ok=True, seconds=round(runner.stop(), 1))
 
 
 @app.post('/api/cmd')
@@ -139,8 +138,9 @@ def shutdown_server():
     body, which a plain cross-site form post can't send."""
     if not body().get('confirm'):
         return error('Send {"confirm": true} to shut down')
+    print('Shutting down (asked by the app window)', flush=True)
     # Ctrl+C ourselves shortly after replying; atexit then stops the network.
-    threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGINT)).start()
+    threading.Timer(0.1, os.kill, (os.getpid(), signal.SIGINT)).start()
     return jsonify(ok=True)
 
 
@@ -148,6 +148,7 @@ def shutdown_server():
 def shutdown():
     if runner.net is not None:
         runner.stop()
+    print('Server stopped', flush=True)
 
 
 if __name__ == '__main__':

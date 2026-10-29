@@ -163,11 +163,18 @@ SERVER_PID=$!
 # Whatever happens: stop the server, wait for it to finish, and give the
 # terminal back in a normal state.
 finish() {
-    shutdown_server
-    for _ in $(seq 1 15); do
+    local began=$SECONDS
+    # The window already asked the server to quit; only ask if it's still up.
+    if server_up; then shutdown_server; fi
+    for _ in $(seq 1 100); do               # wait up to 20 s, checking 5x a second
         [[ -d /proc/$SERVER_PID ]] || break
-        sleep 1
+        sleep 0.2
     done
+    if [[ -d /proc/$SERVER_PID ]]; then
+        warn "the server is still stopping; see $LOG"
+    else
+        info "Stopped ($((SECONDS - began)) s). Details in $LOG"
+    fi
     if [[ $IN_TERMINAL -eq 1 ]]; then stty sane 2>/dev/null || true; fi
 }
 trap finish EXIT
@@ -185,7 +192,7 @@ case $MODE in
     window)
         info "Opening the Mininet UI window"
         python3 desktop/window.py "$URL" </dev/null
-        info "Window closed, stopping the server" ;;
+        info "Window closed, stopping the network and server" ;;
     browser)
         info "Mininet UI is running at $URL (Ctrl+C to stop)"
         open_browser
