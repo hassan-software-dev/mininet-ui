@@ -91,7 +91,7 @@ function download(filename, content, type) {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);  // after the download started
 }
 
 $('btn-new').addEventListener('click', () => {
@@ -123,15 +123,37 @@ $('file-input').addEventListener('change', async evt => {
 
 // Save as .mn (MiniEdit's format, opens in MiniEdit too) unless the user
 // types a name ending in .json.
+// In the desktop app (desktop/window.py) files are saved through a native
+// Save dialog: we send it the content for each allowed extension, and it
+// calls appSaveDone(path) back (path is null if the user cancelled).
+const desktopApp = window.webkit && window.webkit.messageHandlers &&
+                   window.webkit.messageHandlers.mininetui;
+let onAppSaved = null;
+
+window.appSaveDone = path => {
+  if (path && onAppSaved) onAppSaved(path);
+  onAppSaved = null;
+};
+
+function saveInApp(name, files, done) {
+  onAppSaved = done;
+  desktopApp.postMessage(JSON.stringify({ action: 'save', name, files }));
+}
+
 $('btn-save').addEventListener('click', () => {
+  const mn = JSON.stringify(toMiniEdit(state.topo), null, 2);
+  const json = JSON.stringify(state.topo, null, 2);
+  if (desktopApp) {
+    return saveInApp(fileName + '.mn', { '.mn': mn, '.json': json }, path => {
+      setFileName(path.split('/').pop());
+      notify('Saved ' + path, 'ok');
+    });
+  }
   const name = prompt('Save as (.mn = MiniEdit format, or .json):', fileName + '.mn');
   if (!name) return;
   const file = /\.(mn|json)$/i.test(name) ? name : name + '.mn';
-  if (file.toLowerCase().endsWith('.json')) {
-    download(file, JSON.stringify(state.topo, null, 2), 'application/json');
-  } else {
-    download(file, JSON.stringify(toMiniEdit(state.topo), null, 2), 'application/json');
-  }
+  const isJson = file.toLowerCase().endsWith('.json');
+  download(file, isJson ? json : mn, 'application/json');
   setFileName(file);
   notify('Saved ' + file, 'ok');
 });
@@ -139,6 +161,10 @@ $('btn-save').addEventListener('click', () => {
 $('btn-export').addEventListener('click', async () => {
   try {
     const data = await api('/api/export', state.topo);
+    if (desktopApp) {
+      return saveInApp(fileName + '.py', { '.py': data.script }, path =>
+        notify(`Exported ${path} (run it with: sudo python3 ${path})`, 'ok'));
+    }
     download(fileName + '.py', data.script, 'text/x-python');
     notify(`Exported ${fileName}.py (run it with: sudo python3 ${fileName}.py)`, 'ok');
   } catch (e) {
@@ -154,6 +180,7 @@ $('btn-run').addEventListener('click', async () => {
     showWarnings(data.warnings);
     notify('Network running: ' + data.hosts.length + ' hosts, ' +
            data.switches.length + ' switches', 'ok');
+    pollStatus();       // show the controller connection status right away
   }
   updateControls();
 });
@@ -174,6 +201,7 @@ function updateControls() {
   const badge = $('net-status');
   badge.textContent = busy ? 'working...' : state.running ? 'running' : 'stopped';
   badge.className = 'badge' + (busy ? ' busy' : state.running ? ' running' : '');
+  updateControllerBadge();
   ['btn-cmd', 'btn-ping', 'btn-iperf', 'btn-pingall'].forEach(id => {
     $(id).disabled = !state.running || busy;
   });
@@ -243,7 +271,22 @@ function addInfo(body, cls, lines) {
 // Extra details from the controller for the selected switch or host.
 function liveInfo(node) {
   const o = state.live;
-  if (!o || !o.ok) return null;
+  if (node.type === 'controller') {
+    if (!state.running) return null;
+    const names = Object.keys(state.connected);
+    if (!names.length) return ['Checking connections...'];
+    const up = names.filter(n => state.connected[n]), down = names.filter(n => !state.connected[n]);
+    const lines = [down.length ? `Connected: ${up.length} of ${names.length} switches`
+                               : 'Connected to all switches'];
+    if (up.length) lines.push('Connected: ' + up.join(', '));
+    if (down.length) lines.push('Not connected: ' + down.join(', '));
+    return lines;
+  }
+  if (!o || !o.ok) {
+    if (node.type !== 'switch' || !state.running || !(node.name in state.connected)) return null;
+    return [state.connected[node.name] ? 'Connected to the controller'
+                                       : 'Not connected to the controller'];
+  }
   if (node.type === 'switch') {
     const dpid = dpidOf(node);
     const dev = o.devices.find(d => d.dpid === dpid);
@@ -410,11 +453,51 @@ document.addEventListener('keydown', evt => {
 
 // ---- polling: backend status and ONOS live view ----------------------------------
 
+// Toolbar badge: are the switches connected to the controller?
+function updateControllerBadge() {
+  const el = $('ctl-status');
+  const { up, total } = controllerConnections();
+  el.hidden = !state.running || !total;
+  if (el.hidden) return;
+  if (up === total) {
+    el.textContent = 'Controller connected';
+    el.className = 'badge running';
+  } else if (up === 0) {
+    el.textContent = 'Controller not connected';
+    el.className = 'badge down';
+  } else {
+    el.textContent = `Controller: ${up}/${total} switches`;
+    el.className = 'badge busy';
+  }
+}
+
+// Tell the user in the console when switches connect or disconnect.
+function reportConnectionChanges(before, after) {
+  const changed = Object.keys(after).filter(n => before[n] !== after[n]);
+  const joined = changed.filter(n => after[n]), left = changed.filter(n => !after[n]);
+  const names = Object.keys(after);
+  if (joined.length && names.every(n => after[n])) {
+    notify('Controller connected to all switches (' + names.join(', ') + ')', 'ok');
+  } else if (joined.length) {
+    notify('Connected to the controller: ' + joined.join(', '), 'ok');
+  }
+  // On the first report after Run, "not connected" is not news yet.
+  if (left.length && Object.keys(before).length) {
+    notify('Lost connection to the controller: ' + left.join(', '), 'err');
+  }
+}
+
 async function pollStatus() {
   try {
     const data = await api('/api/status');
     isRoot = data.root;
     if (!busy) state.running = data.running;
+    const connected = data.connected || {};
+    if (JSON.stringify(connected) !== JSON.stringify(state.connected)) {
+      reportConnectionChanges(state.connected, connected);
+      state.connected = connected;
+      render();
+    }
   } catch (e) {
     // backend restarting; try again next time
   }

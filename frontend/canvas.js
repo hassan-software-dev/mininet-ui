@@ -46,9 +46,26 @@ function hostsKnown() {
   return state.live.hosts.length > 0;
 }
 
-// 'up' / 'down' for a node, or null when the live view is off.
+// How many switches Open vSwitch reports as connected to a controller.
+function controllerConnections() {
+  const names = Object.keys(state.connected);
+  return { up: names.filter(n => state.connected[n]).length, total: names.length };
+}
+
+// 'up' / 'down' / 'pending' for a node's status dot, or null for no dot.
+// Controller and switch connections come from Open vSwitch while the
+// network runs; the live view (if on) adds what the controller itself sees.
 function nodeStatus(node) {
+  if (node.type === 'controller') {
+    const { up, total } = controllerConnections();
+    if (!state.running || !total) return null;
+    return up === total ? 'up' : up === 0 ? 'down' : 'pending';
+  }
   const o = state.live;
+  if (node.type === 'switch' && (!o || !o.ok)) {
+    if (!state.running || !(node.name in state.connected)) return null;
+    return state.connected[node.name] ? 'up' : 'down';
+  }
   if (!o || !o.ok) return null;
   if (node.type === 'switch') {
     const dev = o.devices.find(d => d.dpid === dpidOf(node));

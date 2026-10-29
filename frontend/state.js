@@ -10,6 +10,7 @@ const state = {
   selected: null,        // { kind: 'node' | 'link' | 'note', id }
   linkStart: null,       // node id while drawing a link
   running: false,        // network is running on the backend
+  connected: {},         // switch name -> connected to a controller (from OVS)
   live: null,            // last controller snapshot (live view), or null
 };
 

@@ -1,6 +1,6 @@
 # Mininet UI
 
-Build a computer network by drawing it, then run it for real, all in your web browser.
+Build a computer network by drawing it, then run it for real, all in one desktop app.
 
 Mininet UI works like Cisco Packet Tracer: you drag PCs, switches and a
 controller onto a workspace and connect them with links. The difference is
@@ -38,11 +38,12 @@ ping between PCs, measure speed, and watch what the controller sees.
 
   You can draw and save networks without a controller. You only need one to
   run them.
-- A web browser (Firefox comes with Ubuntu).
-
-You do **not** need to install Mininet yourself. The start script does it.
+You do **not** need to install Mininet or anything else yourself. The start
+script does it the first time.
 
 ## 2. Install and start
+
+### The first time: from a terminal
 
 Open a **Terminal** (press `Ctrl` + `Alt` + `T`) and type these lines one at a time,
 pressing `Enter` after each:
@@ -60,15 +61,29 @@ chmod +x run.sh
 The script will:
 
 1. ask for your password (it needs administrator rights to create the network);
-2. install anything that is missing (Mininet, Open vSwitch, Flask, iperf);
-3. start ONOS if you have an `onos` Docker container that is stopped;
-4. open **<http://localhost:8080>** in your browser.
+2. install anything that is missing (Mininet, Open vSwitch, and the parts
+   for the app window);
+3. add **Mininet UI** to your app menu;
+4. start ONOS if you have an `onos` Docker container that is stopped;
+5. open the **Mininet UI window**.
 
-Keep the terminal window open while you use the tool. To quit, go back to
-the terminal and press `Ctrl` + `C`.
+### After that: from the app menu
 
-> **Tip:** Next time, you only need `cd mininet-ui` and `./run.sh`.
-> Type `./run.sh --no-browser` if you don't want a browser window opened.
+Press the `Super` (Windows) key, type **Mininet UI** and click the icon
+<img src="frontend/icon.svg" alt="" width="20" align="center">.
+A dialog asks for your password, then the window opens.
+You can right-click it in the dock and choose **Add to Favourites**.
+
+### Quitting
+
+Just close the window. If the network is still running, Mininet UI asks
+whether to stop it first. Everything is cleaned up when the window closes.
+
+> **Tips**
+>
+> - Prefer a browser tab? Start it with `./run.sh --browser`.
+> - `./run.sh --server` only starts the server; open <http://localhost:8080> yourself.
+> - When started from the menu, messages go to `~/.cache/mininet-ui.log`.
 
 ## 3. A tour of the screen
 
@@ -190,10 +205,40 @@ console tells you exactly what to fix when you press **Run** or **Export**.
 1. Make sure your controller (ONOS or OpenDaylight) is running.
 2. Press **Run**. After a few seconds the status turns to **running** and the
    port lights turn green.
-3. Press **Ping all** in the console bar. Every PC tries to reach every other PC.
+3. Check that the controller is connected (see below).
+4. Press **Ping all** in the console bar. Every PC tries to reach every other PC.
    `0% dropped` means everything can talk to everything.
 
 ![Running network with live view](docs/screenshots/04-running-live-view.png)
+
+### Is the controller connected?
+
+While the network runs, Mininet UI keeps checking whether each switch is
+connected to the controller. This works with ONOS and OpenDaylight and needs
+no extra setup. You can see it in four places:
+
+- **Toolbar badge** next to *running*:
+
+  | Badge | Meaning |
+  |-------|---------|
+  | 🟩 **Controller connected** | Every switch is connected. All good. |
+  | 🟨 **Controller: 1/2 switches** | Some switches are connected, others not (yet). |
+  | 🟥 **Controller not connected** | No switch could reach the controller. See [Something went wrong?](#10-something-went-wrong). |
+
+- **Dots** on the controller (green / amber / red, same meaning) and on each
+  switch (green = connected, red = not).
+- **Console messages** such as *Controller connected to all switches (s1, s2)*
+  or *Lost connection to the controller: s2*.
+- **Click the controller** to see which switches are and aren't connected.
+
+Right after **Run** it can take a few seconds for all switches to connect.
+
+![Only one of two switches connected](docs/screenshots/10-controller-partial.png)
+
+*Above: s2 is not connected yet (amber badge, red dot on s2).
+Below: a few seconds later, everything is connected.*
+
+![Controller connected to all switches](docs/screenshots/11-controller-connected.png)
 
 In the console bar at the bottom:
 
@@ -266,14 +311,20 @@ Downloaded files go to your **Downloads** folder.
 
 ## 10. Something went wrong?
 
-**The browser didn't open.**
-Open Firefox yourself and go to `http://localhost:8080`.
+**Nothing happens when I click Mininet UI in the app menu.**
+Something is probably missing. Open a terminal, go to the folder and run
+`./run.sh` once: it installs what's missing and shows any errors. Messages
+from menu starts are in `~/.cache/mininet-ui.log`.
+
+**The app window doesn't open, or stays white.**
+Use the browser instead: `./run.sh --browser`. If the browser didn't open
+either, open Firefox yourself and go to `http://localhost:8080`.
 
 **"Run" is greyed out.**
-The tool was started without administrator rights. Close it (`Ctrl` + `C`
-in the terminal) and start it again with `./run.sh`.
+The tool was started without administrator rights. Close it and start it
+again with `./run.sh` (not `sudo ./run.sh`, and not `python3 backend/app.py`).
 
-**Switches stay red / "Some switches did not connect to the controller".**
+**"Controller not connected" / switches stay red / "Some switches did not connect to the controller".**
 The controller isn't running or isn't reachable.
 - ONOS: check it's running with `docker ps`. After starting, it needs about a
   minute. The `org.onosproject.openflow` app must be active.
@@ -306,12 +357,25 @@ The files were copied from Windows with the wrong line endings. Run
 ### How it works
 
 ```
-browser (frontend/)               backend/ (Python + Flask, runs as root)
-  state.js   topology model    ──JSON──▶ app.py          HTTP API
-  mnfile.js  .mn (MiniEdit) files         topology.py     validate + export script
-  canvas.js  SVG workspace                runner.py       Mininet API (start/stop/cmd)
-  ui.js      panels, console              controllers.py  ONOS / ODL REST ──▶ :8181
+desktop/window.py (GTK + WebKit window, runs as you)
+  └─ shows frontend/ (or use a browser)  backend/ (Python + Flask, runs as root)
+       state.js   topology model    ──JSON──▶ app.py           HTTP API
+       mnfile.js  .mn (MiniEdit) files         topology.py      validate + export script
+       canvas.js  SVG workspace                runner.py        Mininet API (start/stop/cmd)
+       ui.js      panels, console              controllers.py   ONOS / ODL REST ──▶ :8181
+                                               start-server.sh  root part of run.sh
 ```
+
+- `run.sh` installs dependencies, writes the app-menu entry
+  (`~/.local/share/applications/mininet-ui.desktop`), starts
+  `backend/start-server.sh` as root (with `sudo` in a terminal, `pkexec` from
+  the menu) and then opens `desktop/window.py` as the normal user.
+- `desktop/window.py` is a GTK window with a WebKit view of the same web UI.
+  Save/Export go through a native Save dialog: the page posts the file
+  content to `window.webkit.messageHandlers.mininetui` and the window calls
+  `appSaveDone(path)` back. Closing the window calls `/api/shutdown`.
+- The controller connection status comes from Open vSwitch
+  (`OVSSwitch.connected()`), reported by `/api/status` as `connected`.
 
 - The topology is a JSON object with `nodes` and `links` (format documented in
   [backend/topology.py](backend/topology.py)). The same object is saved, run and exported.
@@ -332,8 +396,9 @@ browser (frontend/)               backend/ (Python + Flask, runs as root)
 ### Manual start
 
 ```bash
-sudo apt install python3-flask mininet openvswitch-switch iperf
-sudo python3 backend/app.py         # then open http://localhost:8080
+sudo apt install python3-flask mininet openvswitch-switch iperf python3-gi gir1.2-webkit2-4.0
+sudo python3 backend/app.py         # server; leave it running
+python3 desktop/window.py           # in another terminal (or open http://localhost:8080)
 ```
 
 Without `sudo` the editor and **Export** still work; **Run** is disabled.
@@ -355,7 +420,7 @@ Pass them like `PORT=9000 ./run.sh` (`run.sh` forwards them through `sudo`).
 
 | Method | Path            | Body                 | Result |
 |--------|-----------------|----------------------|--------|
-| GET    | `/api/status`   |                      | `{root, running, hosts, switches}` |
+| GET    | `/api/status`   |                      | `{root, running, hosts, switches, connected}` |
 | POST   | `/api/validate` | topology             | `{warnings}` or `{error, errors}` |
 | POST   | `/api/export`   | topology             | `{script}` |
 | POST   | `/api/start`    | topology             | `{warnings, hosts, switches}` |
@@ -364,6 +429,7 @@ Pass them like `PORT=9000 ./run.sh` (`run.sh` forwards them through `sudo`).
 | POST   | `/api/ping`     | `{src, dst}`         | `{output}` |
 | POST   | `/api/iperf`    | `{src, dst}`         | `{output}` |
 | POST   | `/api/pingall`  |                      | `{output}` |
+| POST   | `/api/shutdown` | `{confirm: true}`    | `{ok}`, then the server quits |
 | GET    | `/api/live?controller=onos\|odl` |    | `{ok, label, devices, links, hosts, flows}` |
 
 ### Tests

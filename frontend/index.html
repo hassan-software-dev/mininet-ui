@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Mininet UI</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -120,6 +121,8 @@
     <button id="btn-stop" class="icon-btn labelled" disabled title="Stop the network">
       <svg class="icon"><use href="#i-stop"/></svg>Stop</button>
     <span id="net-status" class="badge">stopped</span>
+    <span id="ctl-status" class="badge" hidden
+          title="Are the switches connected to the controller? (asked from Open vSwitch)"></span>
 
     <span class="tb-sep"></span>
     <label title="Poll the controller's REST API every 3 s and colour the canvas">

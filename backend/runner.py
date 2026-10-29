@@ -25,6 +25,7 @@ class NetworkRunner:
     def __init__(self):
         self.net = None
         self.spec = None
+        self._connected = {}        # last switch_connections() answer
         self.lock = threading.Lock()
 
     # ---- lifecycle -------------------------------------------------------
@@ -36,7 +37,21 @@ class NetworkRunner:
             'running': True,
             'hosts': [h['name'] for h in self.spec['hosts']],
             'switches': [s['name'] for s in self.spec['switches']],
+            'connected': self.switch_connections(),
         }
+
+    def switch_connections(self):
+        """{switch name: True if connected to a controller}, asked from Open
+        vSwitch. If a long command (e.g. iperf) holds the lock, the last
+        answer is returned instead of waiting."""
+        if self.lock.acquire(timeout=0.2):
+            try:
+                if self.net is not None:
+                    self._connected = {s.name: bool(s.connected())
+                                       for s in self.net.switches}
+            finally:
+                self.lock.release()
+        return self._connected
 
     def start(self, topo):
         """Build and start the network. Returns a list of warnings."""
@@ -85,7 +100,7 @@ class NetworkRunner:
             try:
                 self.net.stop()
             finally:
-                self.net, self.spec = None, None
+                self.net, self.spec, self._connected = None, None, {}
 
     # ---- commands --------------------------------------------------------
 

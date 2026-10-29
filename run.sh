@@ -1,31 +1,52 @@
 #!/usr/bin/env bash
-# Set up and start mininet-ui, then open it in the browser.
+# Start Mininet UI as a desktop app.
 #
-#   ./run.sh                 install missing dependencies, start, open browser
-#   ./run.sh --no-browser    same, but don't open the browser
-#   PORT=9000 ./run.sh       other settings (HOST, ONOS_URL, ODL_URL, ...) too
+#   ./run.sh              install what's missing, then open the app window
+#   ./run.sh --browser    use a browser tab instead of the app window
+#   ./run.sh --server     only start the server (then open http://localhost:8080)
+#   PORT=9000 ./run.sh    other settings (HOST, ONOS_URL, ODL_URL, ...) too
 #
-# Run it as your normal user, NOT with sudo: it asks for your password when
-# it needs root (apt, starting Mininet), and the browser must not run as root.
-# Stop the server with Ctrl+C.
+# Run it as your normal user, NOT with sudo. The first time, run it from a
+# terminal: it installs what's missing and adds "Mininet UI" to the app menu.
+# After that you can also start it from the menu; it then asks for your
+# password in a dialog. Closing the window stops everything.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
 PORT="${PORT:-8080}"
 URL="http://localhost:${PORT}"
-OPEN_BROWSER=1
-[[ "${1:-}" == "--no-browser" ]] && OPEN_BROWSER=0
+
+MODE=window
+case "${1:-}" in
+    --browser) MODE=browser ;;
+    --server|--no-browser) MODE=server ;;
+esac
+
+# Started from the app menu there is no terminal: log to a file instead,
+# and ask for the password with a dialog (pkexec) instead of sudo.
+if [[ -t 0 ]]; then
+    IN_TERMINAL=1
+else
+    IN_TERMINAL=0
+    mkdir -p "$HOME/.cache"
+    exec >>"$HOME/.cache/mininet-ui.log" 2>&1
+    echo "---- $(date)"
+fi
 
 info() { echo -e "\e[1;34m==>\e[0m $*"; }
 warn() { echo -e "\e[1;33mWARNING:\e[0m $*"; }
+fail() {
+    echo "ERROR: $*" >&2
+    if [[ $IN_TERMINAL -eq 0 ]]; then        # show it, there's no terminal
+        zenity --error --title="Mininet UI" --text="$*" 2>/dev/null ||
+            notify-send "Mininet UI" "$*" 2>/dev/null || true
+    fi
+    exit 1
+}
 
-if [[ $EUID -eq 0 ]]; then
-    warn "run this as your normal user (./run.sh), not with sudo;"
-    warn "the browser will not be opened automatically."
-    OPEN_BROWSER=0
-fi
+[[ $EUID -eq 0 ]] && fail "Run ./run.sh as your normal user, not with sudo."
 
-# Does something answer on our port already? (python3 is always on Ubuntu)
 server_up() {
     python3 - "$URL/api/status" <<'EOF' 2>/dev/null
 import sys, urllib.request
@@ -33,30 +54,62 @@ urllib.request.urlopen(sys.argv[1], timeout=1)
 EOF
 }
 
-open_browser() {
-    if [[ $OPEN_BROWSER -eq 1 ]]; then
-        xdg-open "$URL" >/dev/null 2>&1 || echo "Open $URL in your browser."
-    fi
+shutdown_server() {
+    python3 - "$URL/api/shutdown" <<'EOF' 2>/dev/null || true
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1], data=b'{"confirm": true}',
+                             headers={'Content-Type': 'application/json'})
+urllib.request.urlopen(req, timeout=5)
+EOF
 }
 
+open_browser() {
+    xdg-open "$URL" >/dev/null 2>&1 || echo "Open $URL in your browser."
+}
+
+# ---- already running? just open another window -------------------------------
+
 if server_up; then
-    info "mininet-ui is already running at $URL"
-    open_browser
+    info "Mininet UI is already running at $URL"
+    case $MODE in
+        window) exec python3 desktop/window.py "$URL" --keep-server ;;
+        browser) open_browser ;;
+    esac
     exit 0
 fi
 
-# ---- 1. dependencies ---------------------------------------------------------
+# ---- 1. dependencies -----------------------------------------------------------
 
 info "Checking dependencies"
-sudo -v     # ask for the password once, up front
+WEBKIT_PKG=gir1.2-webkit2-4.0                       # Ubuntu 22.04
+if apt-cache show gir1.2-webkit2-4.1 >/dev/null 2>&1; then
+    WEBKIT_PKG=gir1.2-webkit2-4.1                   # Ubuntu 24.04
+fi
 
 missing=()
 python3 -c 'import flask' 2>/dev/null   || missing+=(python3-flask)
 python3 -c 'import mininet' 2>/dev/null || missing+=(mininet)
 command -v ovs-vsctl >/dev/null         || missing+=(openvswitch-switch)
 command -v iperf >/dev/null             || missing+=(iperf)
+if [[ $MODE == window ]]; then
+    python3 -c 'import gi' 2>/dev/null  || missing+=(python3-gi)
+    python3 - <<'EOF' 2>/dev/null       || missing+=("$WEBKIT_PKG")
+import gi
+for version in ('4.1', '4.0'):
+    try:
+        gi.require_version('WebKit2', version)
+        break
+    except ValueError:
+        pass
+else:
+    raise SystemExit(1)
+EOF
+fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then
+    if [[ $IN_TERMINAL -eq 0 ]]; then
+        fail "Some parts are missing (${missing[*]}). Open a terminal, go to $DIR and run ./run.sh once to install them."
+    fi
     info "Installing: ${missing[*]}"
     sudo apt-get update
     sudo apt-get install -y "${missing[@]}"
@@ -64,43 +117,61 @@ else
     info "All dependencies present"
 fi
 
-if ! systemctl is-active --quiet openvswitch-switch; then
-    info "Starting Open vSwitch"
-    sudo systemctl start openvswitch-switch
+# ---- 2. app menu entry ------------------------------------------------------------
+
+# Refreshed on every terminal start, so it follows the folder if it moves.
+if [[ $IN_TERMINAL -eq 1 ]]; then
+    mkdir -p "$HOME/.local/share/applications"
+    cat > "$HOME/.local/share/applications/mininet-ui.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Mininet UI
+Comment=Build and run Mininet networks, Packet Tracer style
+Exec="$DIR/run.sh"
+Icon=$DIR/frontend/icon.svg
+Terminal=false
+Categories=Network;Education;Development;
+StartupWMClass=mininet-ui
+EOF
 fi
 
-# ---- 2. controller -----------------------------------------------------------
+# ---- 3. server (as root) ------------------------------------------------------------
 
-# Start the ONOS container from the Task 1 setup if it exists but is stopped.
-# (docker may need sudo if you're not in the docker group.)
-DOCKER=""
-if command -v docker >/dev/null; then
-    if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo docker"; fi
+# Pass the settings through sudo/pkexec, which otherwise drop them.
+envs=("PORT=$PORT")
+for var in HOST ONOS_URL ONOS_USER ONOS_PASS ODL_URL ODL_USER ODL_PASS; do
+    if [[ -n "${!var:-}" ]]; then envs+=("$var=${!var}"); fi
+done
+
+if [[ $IN_TERMINAL -eq 1 ]]; then
+    sudo -v                                 # ask for the password now
+    ROOT=(sudo)
+else
+    ROOT=(pkexec)                           # graphical password dialog
 fi
-if [[ -n "$DOCKER" ]] && $DOCKER inspect onos >/dev/null 2>&1; then
-    if [[ "$($DOCKER inspect -f '{{.State.Running}}' onos)" != "true" ]]; then
-        info "Starting ONOS container (takes ~1 min to come up fully)"
-        $DOCKER start onos >/dev/null
-    fi
-fi
+info "Starting the server"
+"${ROOT[@]}" /usr/bin/env "${envs[@]}" /bin/bash "$DIR/backend/start-server.sh" &
+SERVER_PID=$!
+trap shutdown_server EXIT                   # whatever happens, don't leave it running
 
-# ONOS and OpenDaylight both serve REST on 8181 by default.
-if ! python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8181), 1)' 2>/dev/null; then
-    warn "no controller is answering on port 8181 yet (ONOS or OpenDaylight)."
-    warn "You can still build topologies; switches won't connect until it is up."
-fi
+for _ in $(seq 1 60); do
+    server_up && break
+    [[ -d /proc/$SERVER_PID ]] || fail "The server did not start (password dialog cancelled?). Details: $HOME/.cache/mininet-ui.log"
+    sleep 1
+done
+server_up || fail "The server did not answer on $URL within 60 seconds."
 
-# ---- 3. server + browser -------------------------------------------------------
+# ---- 4. user interface ----------------------------------------------------------------
 
-# Open the browser once the server answers (in the background, as this user).
-(
-    for _ in $(seq 1 30); do
-        if server_up; then open_browser; exit 0; fi
-        sleep 1
-    done
-    warn "server did not answer on $URL within 30 s"
-) &
-
-info "Starting mininet-ui on $URL (Ctrl+C to stop)"
-exec sudo --preserve-env=PORT,HOST,ONOS_URL,ONOS_USER,ONOS_PASS,ODL_URL,ODL_USER,ODL_PASS \
-    python3 backend/app.py
+case $MODE in
+    window)
+        info "Opening the Mininet UI window"
+        python3 desktop/window.py "$URL" ;;
+    browser)
+        info "Mininet UI is running at $URL (Ctrl+C to stop)"
+        open_browser
+        wait "$SERVER_PID" ;;
+    server)
+        info "Mininet UI is running at $URL (Ctrl+C to stop)"
+        wait "$SERVER_PID" ;;
+esac

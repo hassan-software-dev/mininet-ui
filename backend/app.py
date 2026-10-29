@@ -8,7 +8,9 @@ commands are disabled (Mininet needs root).
 """
 import atexit
 import os
+import signal
 import sys
+import threading
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -126,6 +128,17 @@ def live():
     except Exception as e:      # controller down, wrong password, ...
         return jsonify(ok=False, label=ctl['label'], error='%s unreachable at %s: %s'
                        % (ctl['label'], ctl['url'], e))
+
+
+@app.post('/api/shutdown')
+def shutdown_server():
+    """Quit the server (used when the desktop window closes). Needs a JSON
+    body, which a plain cross-site form post can't send."""
+    if not body().get('confirm'):
+        return error('Send {"confirm": true} to shut down')
+    # Ctrl+C ourselves shortly after replying; atexit then stops the network.
+    threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGINT)).start()
+    return jsonify(ok=True)
 
 
 @atexit.register
