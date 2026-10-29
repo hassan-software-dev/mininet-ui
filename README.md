@@ -200,6 +200,59 @@ Click a device or a link (with **Select**) and edit its settings in the
 | Link | Delay | `5ms` | Extra delay on the cable. Empty = none. |
 | Link | Packet loss | `1` | Percentage of packets dropped. Empty = none. |
 
+### More options
+
+Click **More options** under the basic settings for everything else Mininet
+can do with each device. You can leave all of these alone: the defaults are
+what Mininet itself uses. The section stays open while you click from device
+to device.
+
+<img src="docs/screenshots/12-more-options.png" alt="More options of a switch" width="270" align="right">
+
+**PC**
+
+| Setting | Example | What it does |
+|---------|---------|--------------|
+| Default route | `via 10.0.0.254` | Where the PC sends traffic for other networks (a gateway), or an interface such as `h1-eth0`. |
+| CPU limit | `0.2` | Share of the computer's total CPU this PC may use (20% here). |
+| CPU scheduler | `cfs` | How the CPU limit is enforced: `cfs` (fair share) or `rt` (real-time). |
+| Run only on CPU cores | `0` or `0-1` | Pin the PC to certain CPU cores. |
+| Start command | `python3 -m http.server 80 &` | Runs on the PC right after **Run**. End it with `&` for programs that keep running, like servers. |
+| Stop command | `pkill -f http.server` | Runs on the PC just before **Stop**. |
+
+> CPU limit and cores use Mininet's `CPULimitedHost`, which needs Linux
+> *cgroups*. If **Run** fails with a cgroup error, leave these empty.
+
+**Switch**
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| OpenFlow version | OpenFlow13 | The OpenFlow protocol version the switch speaks. ONOS and OpenDaylight work with 1.3 (and 1.0). |
+| Fail mode | secure | What happens when the controller can't be reached: *secure* drops traffic; *standalone* makes the switch work like an ordinary learning switch. |
+| Datapath | kernel | *kernel* is fast; *user space* runs the switch as a normal program (slower, for experiments). |
+| Spanning Tree Protocol | off | Turn on if your network has loops (cables in a circle), so packets don't go round forever. |
+| Listen port for ovs-ofctl | (none) | Lets you inspect the switch directly, e.g. `ovs-ofctl dump-flows tcp:127.0.0.1:6654`. |
+
+**Controller**
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| Connection | tcp | *ssl* encrypts the OpenFlow connection; it needs certificates set up on the switches and the controller. |
+
+**Link**
+
+| Setting | Example | What it does |
+|---------|---------|--------------|
+| Jitter | `1ms` | Random variation added to the delay (needs a delay). Shown on the link as `5ms ±1ms`. |
+| Queue size | `100` | How many packets the link can hold before it starts dropping them. |
+
+All of these are saved in your file, used by **Run**, and written into an
+exported Python script. In `.mn` files they use MiniEdit's own names where
+MiniEdit has the same setting (for example *dpctl* for the listen port, and
+the PC's start/stop commands).
+
+<br clear="right">
+
 While the network is running, settings are locked (greyed out). Press
 **Stop** to change them. You can still move devices around.
 

@@ -32,11 +32,23 @@ NAME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9]{0,7}$')
 MAC_RE = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 DPID_RE = re.compile(r'^[0-9a-fA-F]{1,16}$')
 DELAY_RE = re.compile(r'^\d+(\.\d+)?(us|ms|s)$')
+# Host default route, passed to `ip route add default ...`: "via <ip>",
+# "dev <interface>" or just an interface name such as "h1-eth0".
+ROUTE_RE = re.compile(r'^(via \d{1,3}(\.\d{1,3}){3}( dev [\w-]+)?|dev [\w-]+|[\w-]+)$')
+CORES_RE = re.compile(r'^\d+([,-]\d+)*$')      # CPU cores, e.g. "0", "0,2", "0-1"
+
+# Choices for the select boxes (first one is Mininet's default).
+OF_VERSIONS = ('OpenFlow13', 'OpenFlow10', 'OpenFlow11', 'OpenFlow12',
+               'OpenFlow14', 'OpenFlow15')
+FAIL_MODES = ('secure', 'standalone')
+DATAPATHS = ('kernel', 'user')
+SCHEDULERS = ('cfs', 'rt')
+CONTROLLER_PROTOCOLS = ('tcp', 'ssl')
 # Node names become variable names in the exported script, so they must not
 # clash with Python keywords or names the script itself uses.
 RESERVED_NAMES = set(keyword.kwlist) | {
     'net', 'info', 'build', 'start_network', 'CLI', 'Mininet', 'TCLink', 'OVSSwitch',
-    'RemoteController', 'setLogLevel'}
+    'RemoteController', 'CPULimitedHost', 'setLogLevel'}
 
 DEFAULT_PREFIX = 8          # same as Mininet's default ipBase 10.0.0.0/8
 DEFAULT_CONTROLLER_PORT = 6653
@@ -68,6 +80,28 @@ def _number(value, field, label, errors, lo, hi):
         errors.append('%s: %s must be between %s and %s' % (label, field, lo, hi))
         return None
     return int(num) if num.is_integer() else num
+
+
+def _choice(value, choices, field, label, errors):
+    """An optional select-box value; blank means the default (first choice)."""
+    value = str(value or '').strip() or choices[0]
+    if value not in choices:
+        errors.append('%s: %s must be one of %s' % (label, field, ', '.join(choices)))
+        return choices[0]
+    return value
+
+
+# ---- keyword arguments for the Mininet API, shared by Run and Export ----
+
+def host_params(host):
+    """Keyword arguments for net.addHost() (besides the name)."""
+    return {k: host[k] for k in ('ip', 'mac', 'defaultRoute', 'sched', 'cpu', 'cores')
+            if k in host}
+
+
+def host_limited(host):
+    """Does this host need CPULimitedHost (a CPU limit or pinned cores)?"""
+    return 'cpu' in host or 'cores' in host
 
 
 def normalize(topo):
@@ -130,6 +164,30 @@ def normalize(topo):
                 else:
                     host['mac'] = mac
                 macs.add(mac)
+            route = str(node.get('defaultRoute') or '').strip()
+            if route:
+                if ROUTE_RE.match(route):
+                    host['defaultRoute'] = route
+                else:
+                    errors.append('%s: default route must look like "via 10.0.0.254" '
+                                  'or "%s-eth0"' % (name, name))
+            # CPU limit / cores: Mininet's CPULimitedHost (uses cgroups).
+            cpu = _number(node.get('cpu'), 'CPU limit', name, errors, 0.01, 1)
+            cores = str(node.get('cores') or '').strip()
+            if cores and not CORES_RE.match(cores):
+                errors.append('%s: cores must look like 0, 0,2 or 0-1' % name)
+                cores = ''
+            if cpu is not None or cores:
+                host['sched'] = _choice(node.get('sched'), SCHEDULERS, 'scheduler',
+                                        name, errors)
+                if cpu is not None:
+                    host['cpu'] = cpu
+                if cores:
+                    host['cores'] = cores
+            for key in ('startCommand', 'stopCommand'):
+                command = str(node.get(key) or '').strip()
+                if command:
+                    host[key] = command
             spec['hosts'].append(host)
 
         elif ntype == 'switch':
@@ -145,8 +203,24 @@ def normalize(topo):
                 elif dpid in dpids:
                     errors.append('%s: duplicate DPID %s' % (name, dpid))
                 dpids.add(dpid)
+            # Keyword arguments for net.addSwitch(); only non-defaults besides
+            # protocols, which is always given (Open vSwitch's default is 1.0).
+            opts = {'protocols': _choice(node.get('protocols'), OF_VERSIONS,
+                                         'OpenFlow version', name, errors)}
+            fail_mode = _choice(node.get('failMode'), FAIL_MODES, 'fail mode', name, errors)
+            if fail_mode != 'secure':
+                opts['failMode'] = fail_mode
+            datapath = _choice(node.get('datapath'), DATAPATHS, 'datapath', name, errors)
+            if datapath != 'kernel':
+                opts['datapath'] = datapath
+            if node.get('stp') in (True, 'true', '1', 1):
+                opts['stp'] = True
+            listen = _number(node.get('listenPort'), 'listen port', name, errors, 1, 65535)
+            if listen is not None:
+                opts['listenPort'] = int(listen)
             # 'controllers' is filled in from the control links below.
-            spec['switches'].append({'name': name, 'dpid': dpid, 'controllers': []})
+            spec['switches'].append({'name': name, 'dpid': dpid, 'controllers': [],
+                                     'opts': opts})
 
         else:  # controller
             ip = str(node.get('ip') or '127.0.0.1').strip()
@@ -162,7 +236,10 @@ def normalize(topo):
                     raise ValueError
             except (TypeError, ValueError):
                 errors.append('%s: port must be 1-65535' % name)
-            spec['controllers'].append({'name': name, 'ip': ip, 'port': port})
+            protocol = _choice(node.get('protocol'), CONTROLLER_PROTOCOLS, 'protocol',
+                               name, errors)
+            spec['controllers'].append({'name': name, 'ip': ip, 'port': port,
+                                        'protocol': protocol})
 
     linked = set()
     for link in links:
@@ -200,6 +277,17 @@ def normalize(topo):
         loss = _number(link.get('loss'), 'loss', label, errors, 0, 100)
         if loss:
             opts['loss'] = loss
+        jitter = str(link.get('jitter') or '').strip()
+        if jitter:
+            if jitter.replace('.', '', 1).isdigit():
+                jitter += 'ms'
+            if DELAY_RE.match(jitter):
+                opts['jitter'] = jitter
+            else:
+                errors.append('%s: jitter must look like 1ms, 500us or 1s' % label)
+        queue = _number(link.get('max_queue_size'), 'queue size', label, errors, 1, 1000000)
+        if queue is not None:
+            opts['max_queue_size'] = int(queue)
         spec['links'].append({'src': a['name'], 'dst': b['name'], 'opts': opts})
         linked.update((a['name'], b['name']))
 
@@ -241,9 +329,11 @@ def generate_script(topo):
     for note in topo.get('notes') or []:
         for i, line in enumerate(str(note.get('text', '')).strip().splitlines()):
             out.append(('# Note: ' if i == 0 else '#       ') + line)
+    limited = any(host_limited(h) for h in spec['hosts'])
     out += [
         'from mininet.net import Mininet',
-        'from mininet.node import RemoteController, OVSSwitch',
+        'from mininet.node import RemoteController, OVSSwitch%s'
+        % (', CPULimitedHost' if limited else ''),
         'from mininet.link import TCLink',
         'from mininet.cli import CLI',
         'from mininet.log import setLogLevel, info',
@@ -253,30 +343,40 @@ def generate_script(topo):
         '    net = Mininet(controller=None, switch=OVSSwitch, link=TCLink,',
         '                  autoSetMacs=False, build=False)',
         '',
-        "    info('*** Adding controllers\\n')",
+        "    info('*** Adding controllers\n')",
     ]
     for c in spec['controllers']:
+        args = [('ip', c['ip']), ('port', c['port'])]
+        if c['protocol'] != 'tcp':
+            args.append(('protocol', c['protocol']))
         out.append('    %s = net.addController(%r, controller=RemoteController, %s)'
-                   % (c['name'], c['name'], _kwargs([('ip', c['ip']), ('port', c['port'])])))
-    out += ['', "    info('*** Adding switches\\n')"]
+                   % (c['name'], c['name'], _kwargs(args)))
+    out += ['', "    info('*** Adding switches\n')"]
     for s in spec['switches']:
-        out.append("    %s = net.addSwitch(%r, dpid=%r, protocols='OpenFlow13')"
-                   % (s['name'], s['name'], s['dpid']))
-    out += ['', "    info('*** Adding hosts\\n')"]
+        out.append('    %s = net.addSwitch(%r, %s)' % (
+            s['name'], s['name'], _kwargs([('dpid', s['dpid'])] + list(s['opts'].items()))))
+    out += ['', "    info('*** Adding hosts\n')"]
     for h in spec['hosts']:
-        extra = [(k, h[k]) for k in ('ip', 'mac') if k in h]
-        args = ', ' + _kwargs(extra) if extra else ''
-        out.append('    %s = net.addHost(%r%s)' % (h['name'], h['name'], args))
-    out += ['', "    info('*** Adding links\\n')"]
+        args = [_kwargs(host_params(h).items())]
+        if host_limited(h):
+            args.insert(0, 'cls=CPULimitedHost')      # a class, so not quoted
+        args = ', '.join(a for a in args if a)
+        out.append('    %s = net.addHost(%r%s)' % (h['name'], h['name'],
+                                                 ', ' + args if args else ''))
+    out += ['', "    info('*** Adding links\n')"]
     for l in spec['links']:
         args = ', ' + _kwargs(sorted(l['opts'].items())) if l['opts'] else ''
         out.append('    net.addLink(%s, %s%s)' % (l['src'], l['dst'], args))
     # Not net.start(): that would connect every switch to every controller.
-    out += ['', '    net.build()', "    info('*** Starting controllers\\n')"]
+    out += ['', '    net.build()', "    info('*** Starting controllers\n')"]
     out += ['    %s.start()' % c['name'] for c in spec['controllers']]
-    out += ["    info('*** Starting switches (each with the controllers it is linked to)\\n')"]
+    out += ["    info('*** Starting switches (each with the controllers it is linked to)\n')"]
     out += ['    %s.start([%s])' % (s['name'], ', '.join(s['controllers']))
             for s in spec['switches']]
+    starts = [h for h in spec['hosts'] if 'startCommand' in h]
+    if starts:
+        out.append("    info('*** Running start commands\n')")
+        out += ['    %s.cmd(%r)' % (h['name'], h['startCommand']) for h in starts]
     out += [
         '    return net',
         '',
@@ -285,6 +385,10 @@ def generate_script(topo):
         "    setLogLevel('info')",
         '    net = start_network()',
         '    CLI(net)',
+    ]
+    out += ["    net.get(%r).cmd(%r)" % (h['name'], h['stopCommand'])
+            for h in spec['hosts'] if 'stopCommand' in h]
+    out += [
         '    net.stop()',
         '',
     ]

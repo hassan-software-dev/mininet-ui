@@ -11,7 +11,7 @@ import shlex
 import threading
 import time
 
-from topology import normalize
+from topology import host_limited, host_params, normalize
 
 CMD_TIMEOUT = 30            # seconds before a user command is killed
 
@@ -58,7 +58,7 @@ class NetworkRunner:
         """Build and start the network. Returns a list of warnings."""
         spec, warnings = normalize(topo)    # raises TopologyError
         from mininet.net import Mininet
-        from mininet.node import RemoteController, OVSSwitch
+        from mininet.node import CPULimitedHost, RemoteController, OVSSwitch
         from mininet.link import TCLink
         from mininet.clean import cleanup
 
@@ -71,12 +71,12 @@ class NetworkRunner:
             try:
                 for c in spec['controllers']:
                     net.addController(c['name'], controller=RemoteController,
-                                      ip=c['ip'], port=c['port'])
+                                      ip=c['ip'], port=c['port'], protocol=c['protocol'])
                 for s in spec['switches']:
-                    net.addSwitch(s['name'], dpid=s['dpid'], protocols='OpenFlow13')
+                    net.addSwitch(s['name'], dpid=s['dpid'], **s['opts'])
                 for h in spec['hosts']:
-                    params = {k: h[k] for k in ('ip', 'mac') if k in h}
-                    net.addHost(h['name'], **params)
+                    cls = CPULimitedHost if host_limited(h) else None
+                    net.addHost(h['name'], cls=cls, **host_params(h))
                 for l in spec['links']:
                     net.addLink(l['src'], l['dst'], **l['opts'])
                 # Not net.start(): that connects every switch to every
@@ -104,13 +104,27 @@ class NetworkRunner:
             if controlled:
                 warnings.append('%s did not connect to the controller within 10 s '
                                 '(is it running?)' % ', '.join(s.name for s in controlled))
+
+            # Hosts' start commands (e.g. a server ending in "&").
+            for h in spec['hosts']:
+                if 'startCommand' in h:
+                    out = self._timed_cmd(net.get(h['name']), h['startCommand']).strip()
+                    if out:
+                        warnings.append('%s start command said: %s' % (h['name'], out))
         return warnings
+
+    def _timed_cmd(self, host, cmd):
+        """Run cmd on host; `timeout` stops it from hanging forever."""
+        return host.cmd('timeout %d sh -c %s' % (CMD_TIMEOUT, shlex.quote(cmd)))
 
     def stop(self):
         with self.lock:
             if self.net is None:
                 raise RunnerError('Network is not running')
             try:
+                for h in self.spec['hosts']:
+                    if 'stopCommand' in h:
+                        self._timed_cmd(self.net.get(h['name']), h['stopCommand'])
                 self.net.stop()
             finally:
                 self.net, self.spec, self._connected = None, None, {}
@@ -129,9 +143,7 @@ class NetworkRunner:
         if not cmd.strip():
             raise RunnerError('Command is empty')
         with self.lock:
-            host = self._host(name)
-            # `timeout` stops commands like a bare `ping` from hanging forever.
-            return host.cmd('timeout %d sh -c %s' % (CMD_TIMEOUT, shlex.quote(cmd)))
+            return self._timed_cmd(self._host(name), cmd)
 
     def ping(self, src, dst, count=4):
         with self.lock:

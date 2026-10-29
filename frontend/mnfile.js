@@ -28,6 +28,27 @@ function nodeNumbers(nodes) {
   return result;
 }
 
+// Copy the fields that are set (not blank) from one object to another.
+function copyFields(from, to, keys) {
+  for (const k of keys) {
+    if (from[k] !== '' && from[k] != null && from[k] !== false) to[k] = from[k];
+  }
+}
+
+// The fields of a MiniEdit opts object that are set, as a new object.
+function pick(opts, keys) {
+  const result = {};
+  copyFields(opts, result, keys);
+  return result;
+}
+
+// MiniEdit's global "OpenFlow versions" ticks: those used by any switch.
+function openFlowVersions(switches) {
+  const used = new Set(switches.map(s => s.protocols || 'OpenFlow13'));
+  const tick = v => (used.has('OpenFlow' + v) ? '1' : '0');
+  return { ovsOf10: tick('10'), ovsOf11: tick('11'), ovsOf12: tick('12'), ovsOf13: tick('13') };
+}
+
 function numberOrString(value) {
   const s = String(value == null ? '' : value).trim();
   return s !== '' && !isNaN(Number(s)) ? Number(s) : s;
@@ -42,7 +63,7 @@ function toMiniEdit(topo) {
     (topo.nodes.find(n => n.id === id) || {}).type === 'controller');
 
   const controllers = byType('controller').map(c => Object.assign(pos(c), {
-    opts: { hostname: c.name, controllerType: 'remote', controllerProtocol: 'tcp',
+    opts: { hostname: c.name, controllerType: 'remote', controllerProtocol: c.protocol || 'tcp',
             remoteIP: c.ip || '127.0.0.1', remotePort: Number(c.port) || 6653 },
   }));
 
@@ -57,6 +78,9 @@ function toMiniEdit(topo) {
     const opts = { hostname: s.name, nodeNum: num, switchType: 'default',
                    controllers: controllersOf(s) };
     if (s.dpid) opts.dpid = s.dpid;
+    if (s.listenPort) opts.dpctl = String(s.listenPort);    // MiniEdit's name for it
+    // Not in MiniEdit (it ignores them), kept for us:
+    copyFields(s, opts, ['protocols', 'failMode', 'datapath', 'stp']);
     return Object.assign({ number: String(num) }, pos(s), { opts });
   });
 
@@ -66,12 +90,16 @@ function toMiniEdit(topo) {
     const opts = { hostname: h.name, nodeNum: num, sched: 'host' };
     if (h.ip) opts.ip = h.ip;
     if (h.mac) opts.mac = h.mac;      // ignored by MiniEdit, kept for us
+    copyFields(h, opts, ['defaultRoute', 'cores', 'startCommand', 'stopCommand']);
+    if (h.cpu) opts.cpu = Number(h.cpu);
+    // MiniEdit's sched "host" means no CPU limit.
+    if (h.cpu || h.cores) opts.sched = h.sched || 'cfs';
     return Object.assign({ number: String(num) }, pos(h), { opts });
   });
 
   const links = topo.links.filter(l => !isControl(l)).map(l => {
     const opts = {};
-    for (const key of ['bw', 'delay', 'loss']) {
+    for (const key of ['bw', 'delay', 'loss', 'jitter', 'max_queue_size']) {
       if (l[key] !== '' && l[key] != null) opts[key] = numberOrString(l[key]);
     }
     return { src: name(l.src), dest: name(l.dst), opts };
@@ -81,7 +109,7 @@ function toMiniEdit(topo) {
     application: {
       ipBase: '10.0.0.0/8', terminalType: 'xterm', startCLI: '0',
       switchType: 'ovs', dpctl: '',
-      openFlowVersions: { ovsOf10: '0', ovsOf11: '0', ovsOf12: '0', ovsOf13: '1' },
+      openFlowVersions: openFlowVersions(byType('switch')),
       sflow: { sflowTarget: '', sflowHeader: '128', sflowSampling: '400', sflowPolling: '30' },
       netflow: { nflowTarget: '', nflowTimeout: '600', nflowAddId: '0' },
     },
@@ -95,6 +123,10 @@ function toMiniEdit(topo) {
 // MiniEdit .mn object -> our topology. `notes` collects conversion messages.
 function fromMiniEdit(data, notes) {
   const nodes = [], links = [], idByName = {};
+  // MiniEdit sets the OpenFlow version for all switches; use the newest ticked one.
+  const versions = (data.application || {}).openFlowVersions || {};
+  const defaultVersion = ['13', '12', '11', '10'].map(v => 'OpenFlow' + v)
+    .find(v => versions['ovsOf' + v.slice(-2)] === '1') || 'OpenFlow13';
   const place = (type, item, fields) => {
     const node = Object.assign({ id: newId('n'), type,
                                  x: Math.round(Number(item.x) || 100),
@@ -111,7 +143,7 @@ function fromMiniEdit(data, notes) {
                  `remote controller`);
     }
     place('controller', c, { name, ip: o.remoteIP || '127.0.0.1',
-                             port: o.remotePort || 6653 });
+                             port: o.remotePort || 6653, protocol: o.controllerProtocol || 'tcp' });
   }
 
   for (const s of data.switches || []) {
@@ -121,7 +153,10 @@ function fromMiniEdit(data, notes) {
     if (o.switchType && !['default', 'ovs'].includes(o.switchType)) {
       notes.push(`${name}: MiniEdit "${o.switchType}" loaded as an OpenFlow switch`);
     }
-    place('switch', s, { name, dpid: o.dpid || hex(num, 16) });
+    place('switch', s, Object.assign({ name, dpid: o.dpid || hex(num, 16),
+                                       protocols: o.protocols || defaultVersion,
+                                       listenPort: o.dpctl || '' },
+                                     pick(o, ['failMode', 'datapath', 'stp'])));
     // The switch's controllers become control links.
     for (const ctl of o.controllers || []) {
       if (idByName[ctl]) {
@@ -135,8 +170,11 @@ function fromMiniEdit(data, notes) {
     const o = h.opts || {};
     const num = parseInt(h.number || o.nodeNum, 10) || 1;
     // MiniEdit fills in IPs from ipBase when they are left blank.
-    place('host', h, { name: o.hostname || 'h' + num,
-                       ip: o.ip || ipFor(num) + '/8', mac: o.mac || macFor(num) });
+    place('host', h, Object.assign({ name: o.hostname || 'h' + num,
+                                     ip: o.ip || ipFor(num) + '/8', mac: o.mac || macFor(num),
+                                     cpu: o.cpu ? String(o.cpu) : '',
+                                     sched: ['cfs', 'rt'].includes(o.sched) ? o.sched : '' },
+                                   pick(o, ['defaultRoute', 'cores', 'startCommand', 'stopCommand'])));
   }
 
   for (const l of data.links || []) {
@@ -148,7 +186,7 @@ function fromMiniEdit(data, notes) {
     const o = l.opts || {};
     const val = key => (o[key] == null ? '' : String(o[key]));
     links.push({ id: newId('l'), src, dst, bw: val('bw'), delay: val('delay'),
-                 loss: val('loss') });
+                 loss: val('loss'), jitter: val('jitter'), max_queue_size: val('max_queue_size') });
   }
   const textNotes = (data.notes || []).map(n => ({
     id: newId('t'), x: Math.round(Number(n.x) || 0), y: Math.round(Number(n.y) || 0),

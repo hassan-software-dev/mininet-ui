@@ -46,6 +46,39 @@ class NormalizeTests(unittest.TestCase):
                                             'opts': {'bw': 10, 'delay': '5ms'}})
         self.assertEqual(spec['links'][1]['opts'], {})
 
+    def test_advanced_options(self):
+        h = dict(H1, defaultRoute='via 10.0.0.254', cpu='0.5', sched='rt', cores='0-1',
+                 startCommand='python3 -m http.server 80 &')
+        s = dict(S1, protocols='OpenFlow10', failMode='standalone', stp=True, listenPort='6654')
+        c = dict(C0, protocol='ssl')
+        spec, _ = normalize(topo([h, s, c], [
+            {'id': 'l', 'src': 'a', 'dst': 'c', 'jitter': '2', 'max_queue_size': '100'},
+            {'id': 'k', 'src': 'c', 'dst': 'd'}]))
+        host = spec['hosts'][0]
+        self.assertEqual(host['defaultRoute'], 'via 10.0.0.254')
+        self.assertEqual((host['cpu'], host['sched'], host['cores']), (0.5, 'rt', '0-1'))
+        self.assertEqual(spec['switches'][0]['opts'], {
+            'protocols': 'OpenFlow10', 'failMode': 'standalone', 'stp': True, 'listenPort': 6654})
+        self.assertEqual(spec['controllers'][0]['protocol'], 'ssl')
+        self.assertEqual(spec['links'][0]['opts'], {'jitter': '2ms', 'max_queue_size': 100})
+
+        script = generate_script(topo([h, s, c], [{'id': 'k', 'src': 'c', 'dst': 'd'},
+                                                 {'id': 'l', 'src': 'a', 'dst': 'c'}]))
+        compile(script, 'topology.py', 'exec')
+        self.assertIn('cls=CPULimitedHost', script)
+        self.assertIn("failMode='standalone'", script)
+        self.assertIn("protocol='ssl'", script)
+        self.assertIn("h1.cmd('python3 -m http.server 80 &')", script)
+
+    def test_bad_advanced_options(self):
+        h = dict(H1, defaultRoute='via x; rm -rf /', cpu='2', cores='a')
+        s = dict(S1, protocols='OpenFlow99')
+        msg = self.errors(topo([h, s]))
+        self.assertIn('default route must look like', msg)
+        self.assertIn('CPU limit must be between', msg)
+        self.assertIn('cores must look like', msg)
+        self.assertIn('OpenFlow version must be one of', msg)
+
     def test_duplicates(self):
         h = dict(H1, id='x', name='h9')
         s = dict(S1, id='y', name='s9', dpid='0x0001')

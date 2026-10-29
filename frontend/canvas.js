@@ -177,7 +177,8 @@ function switchesOf(controller) {
 function linkLabel(link) {
   const parts = [];
   if (link.bw !== '' && link.bw != null) parts.push(link.bw + ' Mb/s');
-  if (link.delay) parts.push(/^[\d.]+$/.test(link.delay) ? link.delay + 'ms' : link.delay);
+  const ms = v => (/^[\d.]+$/.test(v) ? v + 'ms' : v);
+  if (link.delay) parts.push(ms(link.delay) + (link.jitter ? ' ±' + ms(link.jitter) : ''));
   if (link.loss) parts.push(link.loss + '% loss');
   return parts.join(' · ');
 }

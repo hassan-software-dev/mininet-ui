@@ -210,14 +210,53 @@ function updateControls() {
 
 // ---- properties panel ------------------------------------------------------
 
+// Settings shown in the Properties panel for each kind of item. Each field:
+//   [key, label, options]   options: { type: 'select' | 'check', choices,
+//                                      placeholder, more: true = under "More options" }
+// The keys are Mininet's own parameter names (see backend/topology.py).
 const FIELDS = {
-  host: [['name', 'Name'], ['ip', 'IP address (CIDR)'], ['mac', 'MAC address']],
-  switch: [['name', 'Name'], ['dpid', 'DPID (16 hex digits)']],
-  controller: [['name', 'Name'], ['ip', 'Controller IP'], ['port', 'OpenFlow port']],
-  link: [['bw', 'Bandwidth (Mbit/s, blank = unlimited)'],
-         ['delay', 'Delay (e.g. 5ms, blank = none)'],
-         ['loss', 'Packet loss (%)']],
+  host: [
+    ['name', 'Name'],
+    ['ip', 'IP address (CIDR)'],
+    ['mac', 'MAC address'],
+    ['defaultRoute', 'Default route', { more: true, placeholder: 'e.g. via 10.0.0.254' }],
+    ['cpu', 'CPU limit (fraction of total, 0.01 - 1)', { more: true, placeholder: 'blank = no limit' }],
+    ['sched', 'CPU scheduler (with a CPU limit)', { more: true, type: 'select',
+      choices: [['cfs', 'cfs (fair share)'], ['rt', 'rt (real-time)']] }],
+    ['cores', 'Run only on CPU cores', { more: true, placeholder: 'e.g. 0 or 0-1' }],
+    ['startCommand', 'Start command (runs after Run)', { more: true,
+      placeholder: 'e.g. python3 -m http.server 80 &' }],
+    ['stopCommand', 'Stop command (runs before Stop)', { more: true }],
+  ],
+  switch: [
+    ['name', 'Name'],
+    ['dpid', 'DPID (16 hex digits)'],
+    ['protocols', 'OpenFlow version', { more: true, type: 'select',
+      choices: ['OpenFlow13', 'OpenFlow10', 'OpenFlow11', 'OpenFlow12', 'OpenFlow14', 'OpenFlow15'] }],
+    ['failMode', 'Fail mode (when the controller is unreachable)', { more: true, type: 'select',
+      choices: [['secure', 'secure: drop traffic'], ['standalone', 'standalone: act as a normal switch']] }],
+    ['datapath', 'Datapath', { more: true, type: 'select',
+      choices: [['kernel', 'kernel (fast, default)'], ['user', 'user space']] }],
+    ['stp', 'Spanning Tree Protocol (for loops)', { more: true, type: 'check' }],
+    ['listenPort', 'Listen port for ovs-ofctl', { more: true, placeholder: 'e.g. 6654, blank = none' }],
+  ],
+  controller: [
+    ['name', 'Name'],
+    ['ip', 'Controller IP'],
+    ['port', 'OpenFlow port'],
+    ['protocol', 'Connection', { more: true, type: 'select',
+      choices: [['tcp', 'tcp'], ['ssl', 'ssl (needs certificates)']] }],
+  ],
+  link: [
+    ['bw', 'Bandwidth (Mbit/s, blank = unlimited)'],
+    ['delay', 'Delay (e.g. 5ms, blank = none)'],
+    ['loss', 'Packet loss (%)'],
+    ['jitter', 'Jitter (delay variation, e.g. 1ms)', { more: true }],
+    ['max_queue_size', 'Queue size (packets)', { more: true, placeholder: 'blank = default' }],
+  ],
 };
+
+let moreOpen = false;     // keep "More options" open while clicking around
 
 const KIND_TITLES = { host: 'PC', switch: 'Switch', controller: 'Controller' };
 
@@ -244,20 +283,59 @@ function focusNoteText() {
   if (area) { area.focus(); area.select(); }
 }
 
-function addField(body, obj, key, label) {
+function addField(body, obj, key, label, opts = {}) {
   const wrap = document.createElement('label');
-  wrap.textContent = label;
-  const input = document.createElement('input');
-  input.value = obj[key] == null ? '' : obj[key];
-  input.disabled = state.running;
-  input.addEventListener('input', () => {
-    obj[key] = input.value.trim();
+  const changed = value => {
+    obj[key] = value;
     render();
     persist();
     if (key === 'name') updateHostLists();
-  });
-  wrap.appendChild(input);
+  };
+  let input;
+  if (opts.type === 'check') {
+    wrap.className = 'check';
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = !!obj[key];
+    input.addEventListener('change', () => changed(input.checked));
+    wrap.append(input, ' ' + label);
+  } else {
+    wrap.textContent = label;
+    if (opts.type === 'select') {
+      input = document.createElement('select');
+      for (const c of opts.choices) {
+        const [value, text] = Array.isArray(c) ? c : [c, c];
+        input.add(new Option(text, value));
+      }
+      input.value = obj[key] || input.options[0].value;     // blank = the default
+      input.addEventListener('change', () => changed(input.value));
+    } else {
+      input = document.createElement('input');
+      input.value = obj[key] == null ? '' : obj[key];
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      input.addEventListener('input', () => changed(input.value.trim()));
+    }
+    wrap.appendChild(input);
+  }
+  input.disabled = state.running;
   body.appendChild(wrap);
+}
+
+// Basic fields, then the rest in a collapsible "More options" section.
+function addFields(body, obj, kind) {
+  const fields = FIELDS[kind];
+  fields.filter(f => !(f[2] || {}).more).forEach(([key, label, opts]) =>
+    addField(body, obj, key, label, opts));
+  const more = fields.filter(f => (f[2] || {}).more);
+  if (!more.length) return;
+  const details = document.createElement('details');
+  details.open = moreOpen;
+  details.addEventListener('toggle', () => { moreOpen = details.open; });
+  const summary = document.createElement('summary');
+  summary.textContent = 'More options';
+  details.appendChild(summary);
+  more.forEach(([key, label, opts]) => addField(details, obj, key, label, opts));
+  body.appendChild(details);
 }
 
 function addInfo(body, cls, lines) {
@@ -365,7 +443,7 @@ function renderProps() {
   } else {
     title.textContent = KIND_TITLES[kind] + ' ' + obj.name;
   }
-  FIELDS[kind].forEach(([key, label]) => addField(body, obj, key, label));
+  addFields(body, obj, kind);
   if (state.running) addInfo(body, 'hint', ['Stop the network to edit properties.']);
 
   addInfo(body, 'live', []).id = 'props-live';

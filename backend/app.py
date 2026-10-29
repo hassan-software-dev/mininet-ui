@@ -25,6 +25,9 @@ PORT = int(os.environ.get('PORT', 8080))
 IS_ROOT = hasattr(os, 'geteuid') and os.geteuid() == 0
 
 app = Flask(__name__, static_folder=FRONTEND, static_url_path='')
+# Make the browser/app window re-check page files every time, so an updated
+# frontend shows up without clearing any cache.
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 runner = NetworkRunner()
 
 
